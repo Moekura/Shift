@@ -1,0 +1,1448 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>シフト希望登録システム</title>
+<script>
+// Minimal XLSX writer (pure JS, no dependencies)
+const MiniXLSX = (() => {
+  function escape(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  function dateToSerial(d){ // Excel date serial
+    const epoch = new Date(Date.UTC(1899,11,30));
+    return (d - epoch) / 86400000;
+  }
+
+  function buildXlsx(sheets) {
+    // sheets: [{name, rows}]  rows: [[{v, t?},...],...]  t: 's'|'n'|'d'
+    const strings = []; const strMap = {};
+    const getStr = v => { const s=String(v??''); if(strMap[s]===undefined){strMap[s]=strings.length;strings.push(s);} return strMap[s]; };
+
+    const sheetXmls = sheets.map(({name, rows, colWidths}) => {
+      let xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`;
+      if (colWidths) {
+        xml += '<cols>' + colWidths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('') + '</cols>';
+      }
+      xml += '<sheetData>';
+      rows.forEach((row, ri) => {
+        xml += `<row r="${ri+1}">`;
+        row.forEach((cell, ci) => {
+          if (cell == null || cell.v == null || cell.v === '') return;
+          const col = colLetter(ci); const addr = `${col}${ri+1}`;
+          if (cell.t === 'n' || typeof cell.v === 'number') {
+            xml += `<c r="${addr}" t="n"><v>${cell.v}</v></c>`;
+          } else if (cell.t === 'd') {
+            xml += `<c r="${addr}" s="1" t="n"><v>${dateToSerial(cell.v).toFixed(0)}</v></c>`;
+          } else {
+            const si = getStr(cell.v);
+            xml += `<c r="${addr}" t="s"><v>${si}</v></c>`;
+          }
+        });
+        xml += '</row>';
+      });
+      xml += '</sheetData></worksheet>';
+      return xml;
+    });
+
+    const sharedStrXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">
+${strings.map(s=>`<si><t xml:space="preserve">${escape(s)}</t></si>`).join('')}
+</sst>`;
+
+    const wbXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets>${sheets.map((s,i)=>`<sheet name="${escape(s.name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('')}</sheets>
+</workbook>`;
+
+    const wbRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${sheets.map((_,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('')}
+<Relationship Id="rIdSS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>`;
+
+    const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="1"><numFmt numFmtId="164" formatCode="M/D"/></numFmts>
+<fonts count="1"><font><sz val="11"/><name val="Arial"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="2">
+  <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+  <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+</cellXfs>
+</styleSheet>`;
+
+    const pkgRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+
+    const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+${sheets.map((_,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}
+<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`;
+
+    return { sheetXmls, sharedStrXml, wbXml, wbRels, stylesXml, pkgRels, contentTypes };
+  }
+
+  function colLetter(n) {
+    let s=''; n++;
+    while(n>0){ s=String.fromCharCode(64+(n%26||26))+s; n=Math.floor((n-1)/26); }
+    return s;
+  }
+
+  // ZIP writer (no compression, stored)
+  function toZip(files) {
+    const enc = new TextEncoder();
+    const parts = [];
+    const centralDir = [];
+    let offset = 0;
+
+    for (const [name, content] of Object.entries(files)) {
+      const nameBytes = enc.encode(name);
+      const dataBytes = typeof content === 'string' ? enc.encode(content) : content;
+      const crc = crc32(dataBytes);
+      const localHeader = makeLocalHeader(nameBytes, dataBytes.length, crc);
+      parts.push(localHeader, dataBytes);
+      centralDir.push(makeCentralDir(nameBytes, dataBytes.length, crc, offset));
+      offset += localHeader.length + dataBytes.length;
+    }
+
+    const cdBytes = concat(centralDir);
+    const eocd = makeEOCD(centralDir.length, cdBytes.length, offset);
+    return concat([...parts, cdBytes, eocd]);
+  }
+
+  function makeLocalHeader(name, size, crc) {
+    const b = new Uint8Array(30 + name.length);
+    const v = new DataView(b.buffer);
+    v.setUint32(0, 0x04034b50, true); // sig
+    v.setUint16(4, 20, true);         // version needed
+    v.setUint16(6, 0, true);          // flags
+    v.setUint16(8, 0, true);          // compression (stored)
+    v.setUint16(10, 0, true);         // mod time
+    v.setUint16(12, 0, true);         // mod date
+    v.setUint32(14, crc, true);
+    v.setUint32(18, size, true);
+    v.setUint32(22, size, true);
+    v.setUint16(26, name.length, true);
+    v.setUint16(28, 0, true);
+    b.set(name, 30);
+    return b;
+  }
+
+  function makeCentralDir(name, size, crc, offset) {
+    const b = new Uint8Array(46 + name.length);
+    const v = new DataView(b.buffer);
+    v.setUint32(0, 0x02014b50, true);
+    v.setUint16(4, 20, true); v.setUint16(6, 20, true);
+    v.setUint16(8, 0, true); v.setUint16(10, 0, true);
+    v.setUint16(12, 0, true); v.setUint16(14, 0, true);
+    v.setUint32(16, crc, true);
+    v.setUint32(20, size, true); v.setUint32(24, size, true);
+    v.setUint16(28, name.length, true);
+    v.setUint16(30, 0, true); v.setUint16(32, 0, true);
+    v.setUint16(34, 0, true); v.setUint16(36, 0, true);
+    v.setUint32(38, 0, true); v.setUint32(42, offset, true);
+    b.set(name, 46);
+    return b;
+  }
+
+  function makeEOCD(count, cdSize, cdOffset) {
+    const b = new Uint8Array(22);
+    const v = new DataView(b.buffer);
+    v.setUint32(0, 0x06054b50, true);
+    v.setUint16(4, 0, true); v.setUint16(6, 0, true);
+    v.setUint16(8, count, true); v.setUint16(10, count, true);
+    v.setUint32(12, cdSize, true); v.setUint32(16, cdOffset, true);
+    v.setUint16(20, 0, true);
+    return b;
+  }
+
+  function concat(arrays) {
+    const total = arrays.reduce((s,a)=>s+a.length,0);
+    const out = new Uint8Array(total); let i=0;
+    for (const a of arrays) { out.set(a,i); i+=a.length; }
+    return out;
+  }
+
+  function crc32(data) {
+    let crc = 0xFFFFFFFF;
+    for (let i=0;i<data.length;i++) {
+      crc ^= data[i];
+      for (let j=0;j<8;j++) crc = (crc>>>1)^(crc&1?0xEDB88320:0);
+    }
+    return (crc^0xFFFFFFFF)>>>0;
+  }
+
+  function writeFile(sheets, filename) {
+    const x = buildXlsx(sheets);
+    const files = {
+      '[Content_Types].xml': x.contentTypes,
+      '_rels/.rels': x.pkgRels,
+      'xl/workbook.xml': x.wbXml,
+      'xl/_rels/workbook.xml.rels': x.wbRels,
+      'xl/sharedStrings.xml': x.sharedStrXml,
+      'xl/styles.xml': x.stylesXml,
+    };
+    x.sheetXmls.forEach((xml,i) => { files[`xl/worksheets/sheet${i+1}.xml`] = xml; });
+    const zip = toZip(files);
+    const blob = new Blob([zip], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=filename; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
+  return { writeFile };
+})();
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+TC:wght@400;500;700&display=swap');
+
+:root {
+  --bg:#f5f5f5; --white:#ffffff; --black:#1a1a1a; --border:#1a1a1a;
+  --yellow:#F7C242; --teal:#69B0AC; --red:#e03030;
+  --text:#1a1a1a; --text2:#555; --text3:#888;
+  --yellow-bg:#fdf6dc; --teal-bg:#e8f4f3; --red-bg:#fdeaea;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Noto Sans TC','Noto Sans JP',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
+.screen{display:none;min-height:100vh;}
+.screen.active{display:flex;flex-direction:column;}
+
+/* ROLE SCREEN */
+#screen-role{align-items:center;justify-content:center;background:var(--bg);}
+.role-card{text-align:center;padding:48px 32px;}
+.role-logo{width:48px;height:6px;background:var(--yellow);margin:0 auto 20px;}
+.role-card h1{font-size:1.8rem;font-weight:700;letter-spacing:.08em;margin-bottom:8px;color:var(--black);}
+.role-card h1 span{color:var(--yellow);}
+.role-card p{color:var(--text2);margin-bottom:40px;font-size:.875rem;}
+.role-buttons{display:flex;gap:20px;justify-content:center;flex-wrap:wrap;}
+.role-btn{
+  width:180px;padding:28px 20px;background:var(--white);
+  border:1px solid var(--border);border-radius:0;
+  cursor:pointer;transition:all .15s;color:var(--text);font-family:inherit;
+  border-top:3px solid transparent;
+}
+.role-btn:hover{border-top-color:var(--yellow);background:var(--yellow-bg);}
+.role-btn .icon{font-size:2rem;margin-bottom:10px;}
+.role-btn .label{font-size:.95rem;font-weight:700;letter-spacing:.04em;}
+.role-btn .sub{font-size:.72rem;color:var(--text3);margin-top:4px;}
+
+/* HEADER */
+.app-header{display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:var(--black);flex-shrink:0;height:52px;}
+.app-header h2{font-size:.9rem;font-weight:700;color:var(--yellow);letter-spacing:.06em;}
+.hdr-right{display:flex;gap:8px;align-items:center;}
+
+/* BUTTONS */
+.btn{padding:7px 16px;border-radius:0;border:1px solid var(--border);cursor:pointer;font-family:inherit;font-size:.8rem;font-weight:700;transition:all .15s;letter-spacing:.03em;}
+.btn-primary{background:var(--yellow);color:var(--black);border-color:var(--yellow);}
+.btn-primary:hover{background:#e6b030;border-color:#e6b030;}
+.btn-secondary{background:var(--white);color:var(--black);border-color:var(--border);}
+.btn-secondary:hover{background:var(--yellow-bg);border-color:var(--yellow);}
+.btn-danger{background:var(--red-bg);color:var(--red);border-color:var(--red);}
+.btn-danger:hover{background:#f9c0c0;}
+.btn-teal{background:var(--teal);color:#fff;border-color:var(--teal);}
+.btn-teal:hover{background:#5a9d99;}
+.btn-green{background:var(--teal);color:#fff;border-color:var(--teal);}
+.btn-green:hover{background:#5a9d99;}
+.back-btn{background:transparent;border:1px solid rgba(255,255,255,.3);color:rgba(255,255,255,.7);padding:5px 12px;border-radius:0;cursor:pointer;font-family:inherit;font-size:.78rem;transition:all .15s;}
+.back-btn:hover{border-color:var(--yellow);color:var(--yellow);}
+
+/* FORM INPUTS */
+select,input[type="date"],input[type="month"],input[type="text"],input[type="password"]{
+  background:var(--white);border:1px solid var(--border);color:var(--text);
+  padding:7px 12px;border-radius:0;font-family:inherit;font-size:.85rem;outline:none;cursor:pointer;
+}
+select:focus,input:focus{border-color:var(--yellow);outline:2px solid rgba(247,194,66,.2);}
+
+/* TABS */
+.tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);flex-shrink:0;background:var(--white);}
+.tab{padding:10px 22px;background:transparent;border:none;color:var(--text3);cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:700;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s;letter-spacing:.03em;}
+.tab.active{color:var(--black);border-bottom-color:var(--yellow);background:var(--yellow-bg);}
+.tab:hover:not(.active){color:var(--black);}
+.tab-content{display:none;}
+.tab-content.active{display:block;}
+
+/* STAFF SCREEN */
+#screen-staff{background:var(--bg);}
+.staff-wrap{max-width:820px;margin:0 auto;padding:28px 20px;flex:1;}
+.step-block{margin-bottom:32px;}
+.step-label{
+  display:inline-flex;align-items:center;justify-content:center;
+  background:var(--black);color:var(--yellow);font-size:.7rem;font-weight:700;
+  width:22px;height:22px;margin-bottom:8px;letter-spacing:0;
+}
+.step-title{font-size:1rem;font-weight:700;margin-bottom:4px;color:var(--black);border-bottom:2px solid var(--yellow);padding-bottom:4px;display:inline-block;}
+.step-sub{font-size:.78rem;color:var(--text2);margin-top:6px;margin-bottom:16px;}
+
+.name-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;}
+.name-chip{
+  padding:9px 10px;background:var(--white);border:1px solid #ccc;
+  border-radius:0;cursor:pointer;text-align:center;font-size:.82rem;
+  transition:all .12s;font-family:inherit;color:var(--text);
+  border-left:3px solid transparent;
+}
+.name-chip:hover{border-color:var(--border);border-left-color:var(--yellow);background:var(--yellow-bg);}
+.name-chip.selected{border-color:var(--border);border-left-color:var(--yellow);background:var(--yellow-bg);font-weight:700;color:var(--black);}
+
+/* PERIOD SELECT */
+.period-select-list{display:flex;flex-direction:column;gap:6px;}
+.period-chip{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;background:var(--white);border:1px solid #ccc;
+  border-radius:0;cursor:pointer;transition:all .12s;border-left:3px solid transparent;
+}
+.period-chip:hover{border-left-color:var(--yellow);background:var(--yellow-bg);}
+.period-chip.selected{border-left-color:var(--yellow);background:var(--yellow-bg);}
+.period-chip .pname{font-weight:700;font-size:.9rem;}
+.period-chip .pdates{font-size:.75rem;color:var(--text2);}
+.period-chip .pcheck{font-size:1rem;opacity:0;color:var(--yellow);}
+.period-chip.selected .pcheck{opacity:1;}
+.no-periods{color:var(--text3);font-size:.85rem;padding:16px 0;}
+
+/* CALENDAR */
+.cal-header-row{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:3px;}
+.cal-dow{text-align:center;font-size:.68rem;color:var(--text2);padding:4px;font-weight:700;background:var(--black);color:#fff;}
+.cal-dow.sun{background:var(--red);}
+.cal-dow.sat{background:var(--teal);}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:24px;}
+.cal-day{
+  background:var(--white);border:1px solid #ddd;
+  border-radius:0;padding:7px 5px;cursor:pointer;transition:all .12s;min-height:62px;
+}
+.cal-day.empty{background:transparent;border-color:transparent;cursor:default;}
+.cal-day.disabled{opacity:.25;cursor:not-allowed;}
+.cal-day:not(.empty):not(.disabled):hover{border-color:var(--yellow);background:var(--yellow-bg);}
+.cal-day.has-time{background:var(--teal-bg);border-color:var(--teal);border-left:3px solid var(--teal);}
+.day-num{font-size:.78rem;font-weight:700;margin-bottom:3px;}
+.cal-day.sun .day-num{color:var(--red);}
+.cal-day.sat .day-num{color:var(--teal);}
+.cal-day.today{border-color:var(--yellow);border-top:3px solid var(--yellow);}
+.cal-day.today .day-num{color:var(--black);font-weight:700;}
+.day-time{font-size:.6rem;color:var(--teal);font-weight:700;background:rgba(105,176,172,.15);padding:1px 3px;}
+
+/* OVERLAY / POPUP */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center;}
+.overlay.open{display:flex;}
+.popup{background:var(--white);border:1px solid var(--border);border-radius:0;border-top:3px solid var(--yellow);padding:28px;width:320px;max-width:92vw;}
+.popup h4{font-size:.95rem;font-weight:700;margin-bottom:18px;color:var(--black);}
+.time-row{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+.time-row label{font-size:.78rem;color:var(--text2);width:38px;font-weight:600;}
+.tsel{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:0;font-family:inherit;font-size:.9rem;outline:none;}
+.popup-actions{display:flex;gap:8px;margin-top:6px;}
+
+/* SUMMARY */
+.summary-box{background:var(--yellow-bg);border:1px solid var(--border);border-left:4px solid var(--yellow);border-radius:0;padding:16px;margin-bottom:20px;}
+.summary-box h4{font-size:.75rem;color:var(--black);margin-bottom:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
+.s-item{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(0,0,0,.08);font-size:.82rem;}
+.s-item:last-child{border-bottom:none;}
+.s-date{color:var(--text2);}
+.s-time{color:var(--teal);font-weight:700;}
+.submit-btn{width:100%;padding:13px;background:var(--yellow);color:var(--black);border:none;border-radius:0;font-family:inherit;font-size:.95rem;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:.04em;}
+.submit-btn:hover{background:#e6b030;}
+.submit-btn:disabled{opacity:.35;cursor:not-allowed;}
+
+/* ADMIN */
+#screen-admin{background:var(--bg);}
+.admin-wrap{max-width:1200px;margin:0 auto;padding:24px 20px;flex:1;}
+
+/* PANEL */
+.panel{background:var(--white);border:1px solid #ddd;border-radius:0;border-top:3px solid var(--yellow);padding:20px;margin-bottom:20px;}
+.panel-title{font-size:.72rem;font-weight:700;letter-spacing:.1em;color:var(--text3);text-transform:uppercase;margin-bottom:14px;border-bottom:1px solid #eee;padding-bottom:8px;}
+
+/* PERIOD LIST */
+.period-list-admin{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+.period-row{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bg);border:1px solid #ddd;border-radius:0;border-left:3px solid transparent;cursor:pointer;transition:all .12s;}
+.period-row:hover{border-left-color:var(--yellow);background:var(--yellow-bg);}
+.period-row.active-row{border-left-color:var(--yellow);background:var(--yellow-bg);}
+.pr-name{flex:1;font-weight:700;font-size:.875rem;}
+.pr-dates{font-size:.75rem;color:var(--text2);}
+.pr-del{background:transparent;border:1px solid #ccc;color:var(--text3);padding:4px 9px;border-radius:0;cursor:pointer;font-size:.72rem;transition:all .15s;font-family:inherit;}
+.pr-del:hover{border-color:var(--red);color:var(--red);}
+.new-period-form{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;}
+.form-group{display:flex;flex-direction:column;gap:4px;}
+.form-group label{font-size:.72rem;color:var(--text2);font-weight:600;}
+
+/* VIEW TOGGLE */
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;}
+.toolbar-left{flex:1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.view-toggle{display:flex;gap:0;background:var(--white);border:1px solid var(--border);border-radius:0;overflow:hidden;}
+.vt-btn{padding:7px 14px;background:transparent;border:none;color:var(--text2);cursor:pointer;font-family:inherit;font-size:.78rem;font-weight:700;transition:all .15s;}
+.vt-btn.active{background:var(--yellow);color:var(--black);}
+.vt-btn:hover:not(.active){background:var(--yellow-bg);}
+
+/* TABLE */
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:0;}
+table{width:100%;border-collapse:collapse;font-size:.78rem;white-space:nowrap;}
+th{background:var(--black);padding:9px 10px;text-align:center;border-bottom:1px solid var(--border);color:#fff;font-weight:700;font-size:.72rem;letter-spacing:.04em;border-right:1px solid #333;}
+th.th-name{text-align:left;min-width:100px;}
+td{padding:7px 8px;border-bottom:1px solid #e0e0e0;border-right:1px solid #e0e0e0;text-align:center;vertical-align:middle;}
+td.td-name{text-align:left;font-weight:600;background:var(--white);}
+td.td-type{color:var(--text3);font-size:.72rem;background:var(--white);}
+td.td-hours{font-weight:700;color:var(--black);background:var(--yellow-bg);}
+tr:hover td{background:#fafafa;}
+tr:hover td.td-name,tr:hover td.td-type{background:#fafafa;}
+tr:hover td.td-hours{background:var(--yellow-bg);}
+.total-row td{background:#f0f0f0;font-weight:700;color:var(--black);}
+.total-row td.td-hours{background:var(--yellow-bg);color:var(--black);}
+
+/* SHIFT CELL */
+.sc{display:inline-block;font-size:.68rem;padding:2px 6px;border-radius:0;min-width:54px;cursor:default;font-weight:600;}
+.sc-staff{background:var(--teal-bg);color:var(--teal);}
+.sc-admin{background:var(--yellow-bg);color:#8a6d00;}
+.sc-warn{background:var(--red-bg);color:var(--red);border:1px solid var(--red);}
+
+/* INLINE EDIT */
+.edit-cell{position:relative;}
+.cell-input{width:80px;background:var(--white);border:1px solid var(--teal);color:var(--text);padding:3px 6px;border-radius:0;font-family:inherit;font-size:.72rem;text-align:center;outline:none;}
+.cell-input.warn{border-color:var(--red);color:var(--red);background:var(--red-bg);}
+
+/* STATS */
+.stats-row{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+.stat{background:var(--white);border:1px solid #ddd;border-radius:0;border-top:3px solid var(--yellow);padding:14px 16px;flex:1;min-width:110px;}
+.stat .sl{font-size:.68rem;color:var(--text3);margin-bottom:4px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;}
+.stat .sv{font-size:1.4rem;font-weight:700;color:var(--black);}
+
+/* STAFF SETTINGS */
+.staff-edit-list{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+.sei{display:flex;gap:6px;align-items:center;}
+.sei input{flex:1;background:var(--bg);border:1px solid #ccc;color:var(--text);padding:6px 10px;border-radius:0;font-family:inherit;font-size:.8rem;outline:none;}
+.sei input:focus{border-color:var(--yellow);}
+.sei select{min-width:75px;}
+.icon-btn{background:transparent;border:1px solid #ccc;color:var(--text3);padding:5px 9px;border-radius:0;cursor:pointer;font-size:.72rem;transition:all .15s;font-family:inherit;}
+.icon-btn.rm:hover{border-color:var(--red);color:var(--red);background:var(--red-bg);}
+.icon-btn.add:hover{border-color:var(--teal);color:var(--teal);background:var(--teal-bg);}
+
+/* TOAST */
+.toast{position:fixed;bottom:24px;right:24px;background:var(--black);color:var(--yellow);padding:11px 18px;border-radius:0;border-left:4px solid var(--yellow);font-weight:700;font-size:.85rem;opacity:0;transform:translateY(12px);transition:all .3s;z-index:999;pointer-events:none;}
+.toast.show{opacity:1;transform:translateY(0);}
+.toast.error{background:var(--red);color:#fff;border-left-color:#a00;}
+
+/* LEGEND */
+.legend{display:flex;gap:12px;font-size:.72rem;color:var(--text2);align-items:center;flex-wrap:wrap;}
+.leg-item{display:flex;align-items:center;gap:5px;font-weight:600;}
+.leg-dot{width:10px;height:10px;border-radius:0;}
+</style>
+</head>
+<body>
+
+<!-- ROLE -->
+<div id="screen-role" class="screen active">
+  <div class="role-card">
+    <div class="role-logo"></div><h1>シフト希望 <span>登録</span></h1>
+    <p>出勤希望時間帯登記システム</p>
+    <div class="role-buttons">
+      <button class="role-btn" onclick="goStaff()">
+        <div class="icon">👤</div><div class="label">スタッフ</div><div class="sub">出勤希望を登録</div>
+      </button>
+      <button class="role-btn" onclick="askAdminPassword()">
+        <div class="icon">📊</div><div class="label">管理者</div><div class="sub">シフト表を管理</div>
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- PASSWORD OVERLAY -->
+<div class="overlay" id="pw-overlay">
+  <div class="popup" style="width:340px;text-align:center;">
+    <div style="font-size:2rem;margin-bottom:12px;">🔒</div>
+    <h4 style="margin-bottom:6px;font-size:1rem;">管理者パスワード</h4>
+    <p style="font-size:.78rem;color:var(--text2);margin-bottom:20px;">管理者用パスワードを入力してください</p>
+    <input type="password" id="pw-input" placeholder="パスワード"
+      style="width:100%;margin-bottom:8px;padding:10px 14px;font-size:.95rem;text-align:center;background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:inherit;outline:none;"
+      onkeydown="if(event.key==='Enter')checkPassword()">
+    <div id="pw-error" style="color:var(--red);font-size:.78rem;height:18px;margin-bottom:8px;"></div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-secondary" style="flex:1" onclick="closePwOverlay()">キャンセル</button>
+      <button class="btn btn-primary" style="flex:1" onclick="checkPassword()">ログイン</button>
+    </div>
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-size:.72rem;color:var(--text3);margin-bottom:8px;">パスワードを変更</div>
+      <div style="display:flex;gap:6px;">
+        <input type="password" id="pw-new" placeholder="新しいパスワード"
+          style="flex:1;padding:7px 10px;font-size:.8rem;background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:inherit;outline:none;">
+        <button class="btn btn-secondary" style="padding:7px 12px;font-size:.78rem;" onclick="changePassword()">変更</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- STAFF -->
+<div id="screen-staff" class="screen">
+  <div class="app-header">
+    <button class="back-btn" onclick="showScreen('role')">← 戻る</button>
+    <h2>出勤希望登録</h2>
+    <div class="hdr-right"></div>
+  </div>
+  <div class="staff-wrap">
+    <div class="step-block">
+      <div class="step-label">Step 1</div>
+      <div class="step-title">お名前を選択</div>
+      <div class="step-sub">リストからあなたの名前を選んでください</div>
+      <div class="name-grid" id="name-grid"></div>
+    </div>
+
+    <div class="step-block">
+      <div class="step-label">Step 2</div>
+      <div class="step-title">期間を選択</div>
+      <div class="step-sub">管理者が設定した募集期間を選んでください</div>
+      <div class="period-select-list" id="staff-period-list"></div>
+    </div>
+
+    <div id="cal-section" style="display:none">
+      <div class="step-block">
+        <div class="step-label">Step 3</div>
+        <div class="step-title">出勤できる日を選択</div>
+        <div class="step-sub">日付をクリックして希望時間帯を設定（12:00〜22:00）</div>
+        <div class="cal-header-row">
+          <div class="cal-dow sun">日</div><div class="cal-dow">月</div><div class="cal-dow">火</div>
+          <div class="cal-dow">水</div><div class="cal-dow">木</div><div class="cal-dow">金</div>
+          <div class="cal-dow sat">土</div>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
+      </div>
+
+      <div class="summary-box" id="summary-box" style="display:none">
+        <h4>登録内容</h4>
+        <div id="summary-list"></div>
+      </div>
+      <button class="submit-btn" id="submit-btn" onclick="submitShift()" disabled>登録を完了する ✓</button>
+    </div>
+  </div>
+</div>
+
+<!-- TIME POPUP -->
+<div class="overlay" id="time-overlay">
+  <div class="popup">
+    <h4 id="popup-title">時間帯を選択</h4>
+    <div class="time-row">
+      <label>開始</label>
+      <select class="tsel" id="t-start"></select>
+    </div>
+    <div class="time-row">
+      <label>終了</label>
+      <select class="tsel" id="t-end"></select>
+    </div>
+    <div id="popup-break-note" style="font-size:.72rem;color:var(--yellow);margin-bottom:10px;display:none;">
+      ⚠ 6時間超のため、休憩1時間を自動控除します
+    </div>
+    <div class="popup-actions">
+      <button class="btn btn-secondary" onclick="closePopup()">キャンセル</button>
+      <button class="btn btn-danger" id="popup-del" onclick="clearDay()" style="display:none">削除</button>
+      <button class="btn btn-primary" onclick="confirmTime()">決定</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADMIN -->
+<div id="screen-admin" class="screen">
+  <div class="app-header">
+    <button class="back-btn" onclick="showScreen('role')">← 戻る</button>
+    <h2>管理者パネル</h2>
+    <div class="hdr-right">
+      <button class="btn btn-secondary" onclick="printShift()" style="border-color:var(--accent2);color:var(--accent2);">🖨 印刷プレビュー</button>
+      <button class="btn btn-green" onclick="exportExcel()">⬇ Excel出力</button>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+    <div class="tab-bar" style="padding:0 24px;">
+      <button class="tab active" onclick="switchTab('shift',this)">シフト管理</button>
+      <button class="tab" onclick="switchTab('periods',this)">期間設定</button>
+      <button class="tab" onclick="switchTab('staff-settings',this)">スタッフ設定</button>
+    </div>
+
+    <!-- TAB: SHIFT -->
+    <div class="tab-content active" id="tab-shift" style="flex:1;overflow:auto;">
+      <div class="admin-wrap">
+        <!-- Period selector -->
+        <div class="panel" style="margin-bottom:14px;">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div style="font-size:.8rem;color:var(--text2);">表示期間:</div>
+            <select id="admin-period-sel" onchange="renderAdminTable()" style="min-width:200px;">
+              <option value="">— 期間を選択 —</option>
+            </select>
+            <div class="view-toggle">
+              <button class="vt-btn active" id="vt-staff" onclick="setView('staff')">📋 提出データ</button>
+              <button class="vt-btn" id="vt-admin" onclick="setView('admin')">✏️ 排班調整</button>
+            </div>
+            <div class="legend">
+              <div class="leg-item"><div class="leg-dot" style="background:rgba(52,211,153,.4)"></div>スタッフ提出</div>
+              <div class="leg-item" id="leg-admin" style="display:none"><div class="leg-dot" style="background:rgba(108,123,255,.4)"></div>管理者調整</div>
+              <div class="leg-item" id="leg-warn" style="display:none"><div class="leg-dot" style="background:rgba(248,113,113,.4)"></div>提出範囲外</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stats-row" id="stats-row"></div>
+
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <span id="admin-view-label" style="font-size:.8rem;color:var(--text2);"></span>
+          </div>
+          <button class="btn btn-secondary" id="save-admin-btn" onclick="saveAdminEdits()" style="display:none">💾 保存</button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead id="admin-thead"></thead>
+            <tbody id="admin-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: PERIODS -->
+    <div class="tab-content" id="tab-periods">
+      <div class="admin-wrap">
+        <div class="panel">
+          <div class="panel-title">募集期間を作成</div>
+          <div class="new-period-form">
+            <div class="form-group">
+              <label>期間名</label>
+              <input type="text" id="np-name" placeholder="例: 5月前半" style="min-width:130px;">
+            </div>
+            <div class="form-group">
+              <label>開始日</label>
+              <input type="date" id="np-start">
+            </div>
+            <div class="form-group">
+              <label>終了日</label>
+              <input type="date" id="np-end">
+            </div>
+            <button class="btn btn-primary" onclick="createPeriod()" style="align-self:flex-end;">＋ 作成</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">期間リスト</div>
+          <div class="period-list-admin" id="period-list-admin">
+            <div style="color:var(--text3);font-size:.85rem;">まだ期間がありません</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: STAFF SETTINGS -->
+    <div class="tab-content" id="tab-staff-settings">
+      <div class="admin-wrap">
+        <div class="panel">
+          <div class="panel-title">スタッフリスト</div>
+          <div class="staff-edit-list" id="staff-edit-list"></div>
+          <button class="icon-btn add" onclick="addStaffRow()">＋ 追加</button>
+          <div style="display:flex;gap:8px;margin-top:14px;">
+            <button class="btn btn-primary" onclick="saveStaffList()">保存</button>
+            <button class="btn btn-secondary" onclick="resetStaffList()">リセット</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// DATA
+// ============================================================
+const DEFAULT_STAFF = [
+  {name:'張懷文',type:'店長'},{name:'何欣宜',type:'社員'},{name:'王狄',type:'社員'},
+  {name:'田佳良',type:'28'},{name:'刘悦彤',type:'28'},{name:'霍嘉怡',type:'28'},
+  {name:'武啸汐',type:'28'},{name:'贾子璇',type:'28'},{name:'刘芮岐',type:'28'},
+  {name:'李芊媛',type:'28'},{name:'高浩瀚',type:'28'},{name:'孔祥蕊',type:'28'},
+  {name:'张婷婷',type:'28'},{name:'畠中未来',type:'30'},{name:'中村瑠菜',type:''},
+  {name:'塩田彩乃',type:''},{name:'熊谷月渚',type:''},{name:'杉崎陽菜',type:''},
+  {name:'冨樫優斗',type:''},{name:'志村 美咲',type:''},{name:'林郁芯',type:'18'},
+  {name:'柏妤欣',type:''},{name:'川島 知苗',type:''},{name:'CHO EUNJI',type:''},
+];
+
+let staffList  = JSON.parse(localStorage.getItem('staffList')  || 'null') || DEFAULT_STAFF;
+let shiftData  = JSON.parse(localStorage.getItem('shiftData')  || '{}');  // key: name||periodId => {date:time}
+let adminEdits = JSON.parse(localStorage.getItem('adminEdits') || '{}');  // key: name||periodId => {date:time}
+let periods    = JSON.parse(localStorage.getItem('periods')    || '[]');  // [{id,name,start,end}]
+
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbw8zLwCD54EYitPRno2ZxKTpXgWV1GQaU2Z82Vgt4CV9274dV91XsGEtMHKvHZ03J31_w/exec';
+
+function save() {
+  localStorage.setItem('staffList',  JSON.stringify(staffList));
+  localStorage.setItem('shiftData',  JSON.stringify(shiftData));
+  localStorage.setItem('adminEdits', JSON.stringify(adminEdits));
+  localStorage.setItem('periods',    JSON.stringify(periods));
+}
+
+// Send staff shift data to Google Sheets
+async function syncToCloud(name, periodId, periodName, days) {
+  try {
+    const res = await fetch(GAS_URL, {
+      method: 'POST',
+      body: JSON.stringify({name, periodId, periodName, days}),
+    });
+    const json = await res.json();
+    return json.ok;
+  } catch(e) {
+    return false;
+  }
+}
+
+// Load all shift data from Google Sheets into local state
+async function syncFromCloud() {
+  try {
+    const res = await fetch(GAS_URL);
+    const json = await res.json();
+    if (!json.ok) return false;
+    // Rebuild shiftData from cloud rows
+    const newShiftData = {};
+    json.data.forEach(row => {
+      const key = `${row.name}||${row.periodId}`;
+      if (!newShiftData[key]) newShiftData[key] = {};
+      if (row.date && row.time) newShiftData[key][row.date] = row.time;
+    });
+    shiftData = newShiftData;
+    localStorage.setItem('shiftData', JSON.stringify(shiftData));
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+// ============================================================
+// UTILS
+// ============================================================
+const DOW = ['日','月','火','水','木','金','土'];
+
+function datesBetween(start, end) {
+  const dates = []; let d = new Date(start);
+  while (d <= new Date(end)) {
+    dates.push(d.toISOString().slice(0,10));
+    d.setDate(d.getDate()+1);
+  }
+  return dates;
+}
+
+function fmtDate(ds) {
+  const d = new Date(ds);
+  return `${d.getMonth()+1}/${d.getDate()}(${DOW[d.getDay()]})`;
+}
+
+function calcHours(timeStr) {
+  if (!timeStr || timeStr==='-') return 0;
+  const p = timeStr.split('-');
+  const raw = parseInt(p[1]) - parseInt(p[0]);
+  return raw > 6 ? raw - 1 : raw;
+}
+
+function showToast(msg, isErr=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr?' error':'');
+  setTimeout(() => t.className='toast', 2600);
+}
+
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-'+name).classList.add('active');
+}
+
+function switchTab(tab, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-'+tab).classList.add('active');
+}
+
+// ============================================================
+// STAFF SCREEN
+// ============================================================
+let selName = null, selPeriodId = null, selDays = {}, popupDate = null;
+
+function goStaff() {
+  showScreen('staff');
+  selName = null; selPeriodId = null; selDays = {};
+
+  // render name grid
+  const g = document.getElementById('name-grid');
+  g.innerHTML = '';
+  staffList.forEach(s => {
+    const b = document.createElement('button');
+    b.className = 'name-chip'; b.textContent = s.name;
+    b.onclick = () => { selName = s.name; document.querySelectorAll('.name-chip').forEach(c=>c.classList.remove('selected')); b.classList.add('selected'); updateSubmitBtn(); };
+    g.appendChild(b);
+  });
+
+  renderStaffPeriods();
+  document.getElementById('cal-section').style.display = 'none';
+  document.getElementById('submit-btn').disabled = true;
+}
+
+function renderStaffPeriods() {
+  const el = document.getElementById('staff-period-list');
+  if (!periods.length) { el.innerHTML = '<div class="no-periods">管理者がまだ募集期間を設定していません</div>'; return; }
+  el.innerHTML = '';
+  periods.forEach(p => {
+    const d = document.createElement('div');
+    d.className = 'period-chip'; d.dataset.pid = p.id;
+    d.innerHTML = `<div><div class="pname">${p.name}</div><div class="pdates">${p.start} 〜 ${p.end}</div></div><div class="pcheck">✓</div>`;
+    d.onclick = () => selectPeriod(p.id, d);
+    el.appendChild(d);
+  });
+}
+
+function selectPeriod(pid, el) {
+  selPeriodId = pid; selDays = {};
+  document.querySelectorAll('.period-chip').forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  // load existing
+  const key = `${selName||''}||${pid}`;
+  if (selName && shiftData[key]) selDays = JSON.parse(JSON.stringify(shiftData[key]));
+  document.getElementById('cal-section').style.display = 'block';
+  buildCalendar(); updateSummary(); updateSubmitBtn();
+}
+
+function buildCalendar() {
+  const p = periods.find(x=>x.id===selPeriodId); if (!p) return;
+  const days = datesBetween(p.start, p.end);
+  const grid = document.getElementById('cal-grid');
+  grid.innerHTML = '';
+  const firstDow = new Date(days[0]).getDay();
+  for (let i=0;i<firstDow;i++) { const e=document.createElement('div'); e.className='cal-day empty'; grid.appendChild(e); }
+  const today = new Date().toISOString().slice(0,10);
+  days.forEach(ds => {
+    const d = new Date(ds); const dow = d.getDay();
+    const el = document.createElement('div'); el.className='cal-day';
+    if (dow===0) el.classList.add('sun'); if (dow===6) el.classList.add('sat');
+    if (ds===today) el.classList.add('today');
+    if (selDays[ds]) el.classList.add('has-time');
+    const n = document.createElement('div'); n.className='day-num'; n.textContent=d.getDate(); el.appendChild(n);
+    if (selDays[ds]) { const t=document.createElement('div'); t.className='day-time'; t.textContent=selDays[ds]; el.appendChild(t); }
+    el.onclick = () => openPopup(ds);
+    grid.appendChild(el);
+  });
+}
+
+function openPopup(ds) {
+  if (!selName) { showToast('⚠ まず名前を選択してください', true); return; }
+  popupDate = ds;
+  const d = new Date(ds);
+  document.getElementById('popup-title').textContent = `${d.getMonth()+1}月${d.getDate()}日（${DOW[d.getDay()]}）`;
+
+  const ss = document.getElementById('t-start'), es = document.getElementById('t-end');
+  ss.innerHTML = ''; es.innerHTML = '';
+  for (let h=12;h<=22;h++) {
+    const o = `<option value="${h}">${String(h).padStart(2,'0')}:00</option>`;
+    ss.innerHTML += o; if(h<=22) es.innerHTML += o;
+  }
+  if (selDays[ds]) { const p=selDays[ds].split('-'); ss.value=parseInt(p[0]); es.value=parseInt(p[1]); }
+  else { ss.value=12; es.value=18; }
+
+  updateBreakNote();
+  ss.onchange = es.onchange = updateBreakNote;
+  document.getElementById('popup-del').style.display = selDays[ds]?'':'none';
+  document.getElementById('time-overlay').classList.add('open');
+}
+
+function updateBreakNote() {
+  const s=parseInt(document.getElementById('t-start').value), e=parseInt(document.getElementById('t-end').value);
+  document.getElementById('popup-break-note').style.display = (e-s>6)?'block':'none';
+}
+
+function closePopup() { document.getElementById('time-overlay').classList.remove('open'); popupDate=null; }
+
+function clearDay() {
+  if (popupDate) { delete selDays[popupDate]; closePopup(); buildCalendar(); updateSummary(); updateSubmitBtn(); }
+}
+
+function confirmTime() {
+  const s=parseInt(document.getElementById('t-start').value), e=parseInt(document.getElementById('t-end').value);
+  if (e<=s) { showToast('⚠ 終了は開始より後にしてください', true); return; }
+  selDays[popupDate] = `${s}-${e}`;
+  closePopup(); buildCalendar(); updateSummary(); updateSubmitBtn();
+}
+
+function updateSummary() {
+  const box=document.getElementById('summary-box'), list=document.getElementById('summary-list');
+  const entries=Object.entries(selDays).sort((a,b)=>a[0].localeCompare(b[0]));
+  if (!entries.length) { box.style.display='none'; return; }
+  box.style.display='block';
+  list.innerHTML = entries.map(([ds,time])=>{
+    const h=calcHours(time);
+    const raw=parseInt(time.split('-')[1])-parseInt(time.split('-')[0]);
+    const note = raw>6 ? `<span style="font-size:.65rem;color:var(--yellow)"> (-1h休憩=${h}h)</span>` : `<span style="font-size:.65rem;color:var(--text3)"> (${h}h)</span>`;
+    return `<div class="s-item"><span class="s-date">${fmtDate(ds)}</span><span class="s-time">${time}${note}</span></div>`;
+  }).join('');
+}
+
+function updateSubmitBtn() {
+  document.getElementById('submit-btn').disabled = !selName || !selPeriodId || !Object.keys(selDays).length;
+}
+
+async function submitShift() {
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = '送信中... ⏳';
+
+  const key = `${selName}||${selPeriodId}`;
+  shiftData[key] = JSON.parse(JSON.stringify(selDays));
+  save();
+
+  const period = periods.find(p => p.id === selPeriodId);
+  const ok = await syncToCloud(selName, selPeriodId, period ? period.name : selPeriodId, selDays);
+
+  if (ok) {
+    showToast(`✓ ${selName} のシフトを送信しました！`);
+  } else {
+    showToast('⚠ クラウド送信失敗。ローカルに保存しました。', true);
+  }
+
+  selDays = {}; buildCalendar(); updateSummary();
+  btn.disabled = false;
+  btn.textContent = '登録を完了する ✓';
+  updateSubmitBtn();
+}
+
+// ============================================================
+// ADMIN SCREEN
+// ============================================================
+let adminView = 'staff'; // 'staff' | 'admin'
+let pendingEdits = {}; // temp edits before save: name||pid => {date:val}
+
+async function goAdmin() {
+  showScreen('admin');
+  // Show loading state
+  document.getElementById('admin-tbody').innerHTML = '<tr><td colspan="99" style="padding:24px;text-align:center;color:var(--text2);">☁ クラウドからデータを読み込み中...</td></tr>';
+  renderPeriodList(); renderAdminPeriodSel();
+  renderStaffSettings();
+
+  const ok = await syncFromCloud();
+  if (ok) {
+    showToast('☁ クラウドと同期しました');
+  } else {
+    showToast('⚠ クラウド接続失敗。ローカルデータを表示。', true);
+  }
+  renderAdminTable();
+}
+
+function setView(v) {
+  adminView = v;
+  document.getElementById('vt-staff').classList.toggle('active', v==='staff');
+  document.getElementById('vt-admin').classList.toggle('active', v==='admin');
+  document.getElementById('leg-admin').style.display = v==='admin'?'flex':'none';
+  document.getElementById('leg-warn').style.display  = v==='admin'?'flex':'none';
+  document.getElementById('save-admin-btn').style.display = v==='admin'?'':'none';
+  document.getElementById('admin-view-label').textContent = v==='staff'?'スタッフの提出データを表示中':'管理者が排班を調整中（赤字 = 提出範囲外）';
+  pendingEdits = {};
+  renderAdminTable();
+}
+
+function renderAdminPeriodSel() {
+  const sel = document.getElementById('admin-period-sel');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— 期間を選択 —</option>';
+  periods.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = `${p.name}（${p.start}〜${p.end}）`;
+    sel.appendChild(o);
+  });
+  if (cur) sel.value = cur;
+}
+
+function getWeeks(days) {
+  // Split days array into Mon-Sun week groups
+  const weeks = [];
+  let week = [];
+  days.forEach(ds => {
+    const dow = new Date(ds).getDay(); // 0=Sun
+    week.push(ds);
+    if (dow === 0) { weeks.push(week); week = []; } // Sunday = end of week
+  });
+  if (week.length) weeks.push(week);
+  return weeks;
+}
+
+function renderAdminTable() {
+  const pid = document.getElementById('admin-period-sel').value;
+  const thead = document.getElementById('admin-thead');
+  const tbody  = document.getElementById('admin-tbody');
+
+  if (!pid) {
+    thead.innerHTML = '';
+    tbody.innerHTML = '<tr><td colspan="99" style="color:var(--text3);padding:24px;text-align:center;">期間を選択してください</td></tr>';
+    document.getElementById('stats-row').innerHTML = '';
+    return;
+  }
+
+  const period = periods.find(x=>x.id===pid); if (!period) return;
+  const days = datesBetween(period.start, period.end);
+  const weeks = getWeeks(days);
+
+  // ── HEADER ──
+  // Row1: week group labels spanning columns
+  // Row2: 氏名 | 雇用形態 | W1計 | Mon..Sun | W2計 | Mon..Sun ...
+  let h1 = '<tr><th class="th-name" rowspan="2">氏名</th><th rowspan="2">雇用形態</th>';
+  let h2 = '<tr>';
+  weeks.forEach((wdays, wi) => {
+    const borderLeft = wi > 0 ? 'border-left:2px solid var(--teal);' : '';
+    h1 += `<th colspan="${1 + wdays.length}" style="${borderLeft}background:rgba(108,123,255,.08);color:var(--accent2);font-size:.7rem;">第${wi+1}週</th>`;
+    h2 += `<th style="${borderLeft}color:var(--yellow);font-size:.72rem;">週計(h)</th>`;
+    wdays.forEach(ds => {
+      const d = new Date(ds); const dow = d.getDay();
+      const col = dow===0 ? 'color:var(--red)' : dow===6 ? 'color:#60a5fa' : '';
+      const bl = dow===1 && wi>0 ? '' : ''; // mon border handled by week group
+      h2 += `<th style="${col}">${d.getDate()}<br><span style="font-weight:400;font-size:.65rem">${DOW[dow]}</span></th>`;
+    });
+  });
+  h1 += '</tr>'; h2 += '</tr>';
+  thead.innerHTML = h1 + h2;
+
+  // ── BODY ──
+  let bHTML = '';
+  // Track day totals per day and per week
+  const dayTotals = {}; days.forEach(ds => dayTotals[ds] = 0);
+  const weekTotals = weeks.map(() => 0); // PT合計per week
+  let totStaff = 0, totHours = 0, daysSet = new Set();
+
+  staffList.forEach(s => {
+    const key = `${s.name}||${pid}`;
+    const staffRaw = shiftData[key] || {};
+    const adminRaw = adminEdits[key] || {};
+
+    bHTML += `<tr><td class="td-name">${s.name}</td><td class="td-type">${s.type||''}</td>`;
+
+    let grandWh = 0;
+    weeks.forEach((wdays, wi) => {
+      let wh = 0;
+      wdays.forEach(ds => {
+        const val = adminView === 'admin'
+          ? (pendingEdits[key]?.[ds] !== undefined ? pendingEdits[key][ds] : (adminRaw[ds] ?? staffRaw[ds]))
+          : staffRaw[ds];
+        if (val) { const h = calcHours(val); wh += h; dayTotals[ds] += h; daysSet.add(ds); }
+      });
+      grandWh += wh;
+      weekTotals[wi] += wh;
+
+      const borderLeft = wi > 0 ? 'border-left:2px solid var(--teal);' : '';
+      bHTML += `<td class="td-hours" style="${borderLeft}">${wh || '-'}</td>`;
+
+      wdays.forEach(ds => {
+        const staffVal = staffRaw[ds] || null;
+        if (adminView === 'staff') {
+          bHTML += staffVal
+            ? `<td><span class="sc sc-staff">${staffVal}</span></td>`
+            : `<td style="color:var(--text3);font-size:.7rem">-</td>`;
+        } else {
+          const savedAdmin = adminRaw[ds];
+          const pendVal = pendingEdits[key]?.[ds];
+          const displayVal = pendVal !== undefined ? pendVal : (savedAdmin ?? staffVal);
+          const inputVal = displayVal || '';
+          // warn: no staff submission OR outside staff range
+          let isWarn = false;
+          if (displayVal) {
+            const m = displayVal.match(/^(\d{1,2})-(\d{1,2})$/);
+            if (m) {
+              if (!staffVal) { isWarn = true; }
+              else {
+                const sp = staffVal.split('-');
+                if (parseInt(m[1]) < parseInt(sp[0]) || parseInt(m[2]) > parseInt(sp[1])) isWarn = true;
+              }
+            }
+          }
+          bHTML += `<td class="edit-cell"><input class="cell-input${isWarn?' warn':''}"
+            data-key="${key}" data-date="${ds}" data-staff="${staffVal||''}"
+            value="${inputVal}" placeholder="-"
+            oninput="onCellInput(this)" onfocus="this.select()"></td>`;
+        }
+      });
+    });
+
+    totHours += grandWh; if (grandWh > 0) totStaff++;
+    bHTML += '</tr>';
+  });
+
+  // ── TOTAL ROW ──
+  bHTML += '<tr class="total-row"><td class="td-name">PT時數計</td><td></td>';
+  weeks.forEach((wdays, wi) => {
+    const borderLeft = wi > 0 ? 'border-left:2px solid var(--teal);' : '';
+    bHTML += `<td class="td-hours" style="${borderLeft}color:var(--yellow)">${weekTotals[wi] || '-'}</td>`;
+    wdays.forEach(ds => {
+      bHTML += `<td style="color:var(--yellow);font-weight:700">${dayTotals[ds] || '-'}</td>`;
+    });
+  });
+  bHTML += '</tr>';
+  tbody.innerHTML = bHTML;
+
+  document.getElementById('stats-row').innerHTML = `
+    <div class="stat"><div class="sl">登録スタッフ</div><div class="sv">${totStaff}</div></div>
+    <div class="stat"><div class="sl">総勤務時間</div><div class="sv">${totHours}h</div></div>
+    <div class="stat"><div class="sl">シフト有日数</div><div class="sv">${daysSet.size}</div></div>
+    ${weeks.map((_, wi) => `<div class="stat"><div class="sl">第${wi+1}週 合計</div><div class="sv">${weekTotals[wi]}h</div></div>`).join('')}
+  `;
+}
+
+function onCellInput(el) {
+  const key  = el.dataset.key;
+  const date = el.dataset.date;
+  const staffVal = el.dataset.staff || null;
+  const val  = el.value.trim();
+
+  if (!pendingEdits[key]) pendingEdits[key] = {};
+  pendingEdits[key][date] = val;
+
+  let isWarn = false;
+  if (val && val !== '-') {
+    const m = val.match(/^(\d{1,2})-(\d{1,2})$/);
+    if (m) {
+      if (!staffVal) { isWarn = true; }
+      else {
+        const sp = staffVal.split('-');
+        if (parseInt(m[1]) < parseInt(sp[0]) || parseInt(m[2]) > parseInt(sp[1])) isWarn = true;
+      }
+    }
+  }
+  el.classList.toggle('warn', isWarn);
+
+  // live-update the week total cell for this row
+  const row = el.closest('tr');
+  if (!row) return;
+  const pid = document.getElementById('admin-period-sel').value;
+  const period = periods.find(x=>x.id===pid); if (!period) return;
+  const days = datesBetween(period.start, period.end);
+  const weeks = getWeeks(days);
+  const sName = key.split('||')[0];
+  const adminRaw = adminEdits[key] || {};
+  const staffRaw = shiftData[key] || {};
+
+  // recalc each week total for this staff row
+  const weekTdIdx = []; // column indices of week-total cells
+  let col = 2; // 0=name,1=type, then per week: weekTotal + days
+  weeks.forEach((wdays, wi) => {
+    weekTdIdx.push({wi, col, wdays});
+    col += 1 + wdays.length;
+  });
+
+  weekTdIdx.forEach(({wi, col, wdays}) => {
+    let wh = 0;
+    wdays.forEach(ds => {
+      const pv = pendingEdits[key]?.[ds];
+      const v = pv !== undefined ? pv : (adminRaw[ds] ?? staffRaw[ds]);
+      if (v) wh += calcHours(v);
+    });
+    const tds = row.querySelectorAll('td');
+    if (tds[col]) tds[col].textContent = wh || '-';
+  });
+}
+
+function saveAdminEdits() {
+  const pid = document.getElementById('admin-period-sel').value;
+  if (!pid) return;
+  Object.entries(pendingEdits).forEach(([key, dates]) => {
+    if (!adminEdits[key]) adminEdits[key] = {};
+    Object.entries(dates).forEach(([date, val]) => {
+      if (val === '' || val === '-') delete adminEdits[key][date];
+      else adminEdits[key][date] = val;
+    });
+  });
+  pendingEdits = {};
+  save(); showToast('✓ 排班を保存しました');
+  renderAdminTable();
+}
+
+function exportExcel() {
+  const pid = document.getElementById('admin-period-sel').value;
+  if (!pid) { showToast('⚠ 期間を選択してください', true); return; }
+  const period = periods.find(x=>x.id===pid); if (!period) return;
+  const days = datesBetween(period.start, period.end);
+  const weeks = getWeeks(days);
+
+  const rows = [];
+
+  // Header row 1: week group labels
+  const h1 = [{v:'雇用型態'}, {v:'氏名'}];
+  weeks.forEach((wdays, wi) => {
+    h1.push({v:`第${wi+1}週(h)`});
+    wdays.forEach(ds => {
+      const d = new Date(ds + 'T00:00:00');
+      h1.push({v:`${d.getMonth()+1}/${d.getDate()}(${DOW[d.getDay()]})`});
+    });
+  });
+  rows.push(h1);
+
+  // Staff rows
+  staffList.forEach(s => {
+    const key = `${s.name}||${pid}`;
+    const staffRaw = shiftData[key] || {};
+    const adminRaw = adminEdits[key] || {};
+    const row = [{v: s.type||''}, {v: s.name}];
+    weeks.forEach(wdays => {
+      let wh = 0;
+      const weekVals = [];
+      wdays.forEach(ds => {
+        const val = adminRaw[ds] ?? staffRaw[ds];
+        weekVals.push(val ? {v: val} : null);
+        if (val) wh += calcHours(val);
+      });
+      row.push({v: wh, t:'n'});
+      weekVals.forEach(v => row.push(v));
+    });
+    rows.push(row);
+  });
+
+  // Total row (PT時數 per week + per day)
+  const tRow = [null, {v:'PT時數'}];
+  weeks.forEach(wdays => {
+    let wt = 0;
+    const dayVals = [];
+    wdays.forEach(ds => {
+      let dt = 0;
+      staffList.forEach(s => {
+        const key = `${s.name}||${pid}`;
+        const val = (adminEdits[key]||{})[ds] ?? (shiftData[key]||{})[ds];
+        if (val) dt += calcHours(val);
+      });
+      wt += dt;
+      dayVals.push(dt > 0 ? {v: dt, t:'n'} : null);
+    });
+    tRow.push({v: wt, t:'n'});
+    dayVals.forEach(v => tRow.push(v));
+  });
+  rows.push(tRow);
+
+  // Column widths
+  const colWidths = [9, 12];
+  weeks.forEach(wdays => { colWidths.push(8); wdays.forEach(()=>colWidths.push(9)); });
+
+  MiniXLSX.writeFile([{name: period.name.slice(0,31), rows, colWidths}], `${period.name}_シフト.xlsx`);
+  showToast('✓ Excel出力完了！');
+}
+
+// ============================================================
+// PERIOD MANAGEMENT
+// ============================================================
+function createPeriod() {
+  const name  = document.getElementById('np-name').value.trim();
+  const start = document.getElementById('np-start').value;
+  const end   = document.getElementById('np-end').value;
+  if (!name || !start || !end) { showToast('⚠ 全項目を入力してください', true); return; }
+  if (end < start) { showToast('⚠ 終了日は開始日以降にしてください', true); return; }
+  const id = 'p_' + Date.now();
+  periods.push({id, name, start, end});
+  save(); renderPeriodList(); renderAdminPeriodSel();
+  document.getElementById('np-name').value = '';
+  document.getElementById('np-start').value = '';
+  document.getElementById('np-end').value = '';
+  showToast(`✓ 期間「${name}」を作成しました`);
+}
+
+function renderPeriodList() {
+  const el = document.getElementById('period-list-admin');
+  if (!el) return;
+  if (!periods.length) { el.innerHTML = '<div style="color:var(--text3);font-size:.85rem;">まだ期間がありません</div>'; return; }
+  el.innerHTML = '';
+  periods.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'period-row';
+    row.innerHTML = `<div class="pr-name">${p.name}</div><div class="pr-dates">${p.start} 〜 ${p.end}</div>
+      <button class="pr-del" onclick="deletePeriod('${p.id}',event)">削除</button>`;
+    el.appendChild(row);
+  });
+}
+
+function deletePeriod(id, e) {
+  e.stopPropagation();
+  if (!confirm('この期間を削除しますか？（提出データも削除されます）')) return;
+  periods = periods.filter(p => p.id !== id);
+  Object.keys(shiftData).forEach(k  => { if (k.includes(`||${id}`)) delete shiftData[k]; });
+  Object.keys(adminEdits).forEach(k => { if (k.includes(`||${id}`)) delete adminEdits[k]; });
+  save(); renderPeriodList(); renderAdminPeriodSel(); renderAdminTable();
+  showToast('削除しました');
+}
+
+// ============================================================
+// STAFF SETTINGS
+// ============================================================
+function renderStaffSettings() {
+  const el = document.getElementById('staff-edit-list');
+  if (!el) return;
+  const types = ['','店長','社員','18','28','30'];
+  el.innerHTML = staffList.map((s, i) => `
+    <div class="sei">
+      <input value="${s.name}" id="sn-${i}" placeholder="名前">
+      <select id="st-${i}">${types.map(t=>`<option value="${t}"${s.type===t?' selected':''}>${t||'-'}</option>`).join('')}</select>
+      <button class="icon-btn rm" onclick="removeStaff(${i})">✕</button>
+    </div>`).join('');
+}
+
+function addStaffRow()  { staffList.push({name:'',type:''}); renderStaffSettings(); }
+function removeStaff(i) { staffList.splice(i,1); renderStaffSettings(); }
+
+function saveStaffList() {
+  staffList = staffList.map((_,i) => ({
+    name: document.getElementById(`sn-${i}`).value.trim(),
+    type: document.getElementById(`st-${i}`).value,
+  })).filter(s => s.name);
+  save(); showToast('✓ 保存しました');
+}
+
+function resetStaffList() {
+  if (!confirm('デフォルトにリセットしますか？')) return;
+  staffList = JSON.parse(JSON.stringify(DEFAULT_STAFF));
+  save(); renderStaffSettings(); showToast('リセットしました');
+}
+
+// ============================================================
+// PRINT (週1ページ、PDFフォーマット)
+// ============================================================
+function printShift() {
+  const pid = document.getElementById('admin-period-sel').value;
+  if (!pid) { showToast('⚠ 期間を選択してください', true); return; }
+  const period = periods.find(x => x.id===pid); if (!period) return;
+  const days  = datesBetween(period.start, period.end);
+  const weeks = getWeeks(days);
+
+  const JDOW = ['日','月','火','水','木','金','土'];
+  const JMON = ['','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+
+  let html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>${period.name} シフト表</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&family=Noto+Sans+TC:wght@400;700&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Noto Sans TC','Noto Sans JP',sans-serif;font-size:11px;background:#fff;color:#111;}
+  .page{width:100%;page-break-after:always;padding:14px 16px;}
+  .page:last-child{page-break-after:auto;}
+  h2{font-size:14px;font-weight:700;margin-bottom:10px;letter-spacing:.05em;}
+  table{width:100%;border-collapse:collapse;margin-bottom:10px;}
+  th,td{border:1px solid #bbb;padding:4px 5px;text-align:center;vertical-align:middle;white-space:nowrap;}
+  th{background:#e8eaf6;font-weight:700;font-size:10px;}
+  th.th-name{text-align:left;min-width:72px;}
+  td.td-name{text-align:left;font-weight:600;}
+  td.td-type{font-size:9px;color:#666;}
+  td.td-hours{font-weight:700;background:#fff9e6;}
+  .sun{color:#c00;}
+  .sat{color:#1565c0;}
+  .shift-val{font-size:10px;}
+  .total-row td{background:#f0f4ff;font-weight:700;}
+  .day-total-row td{background:#e8f5e9;font-weight:700;font-size:10px;}
+  @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
+</style></head><body>`;
+
+  weeks.forEach((wdays, wi) => {
+    // build date header labels
+    const firstD = new Date(wdays[0]);
+    const lastD  = new Date(wdays[wdays.length-1]);
+    const rangeLabel = `${firstD.getMonth()+1}月${firstD.getDate()}日 〜 ${lastD.getMonth()+1}月${lastD.getDate()}日`;
+
+    html += `<div class="page">
+<h2>${period.name}　第${wi+1}週　${rangeLabel}</h2>
+<table>
+<thead><tr>
+  <th class="th-name">氏名</th>
+  <th>雇用<br>形態</th>
+  <th>週計<br>(h)</th>`;
+    wdays.forEach(ds => {
+      const d = new Date(ds); const dow = d.getDay();
+      const cls = dow===0?' class="sun"':dow===6?' class="sat"':'';
+      html += `<th${cls}>${d.getMonth()+1}月${d.getDate()}日<br>(${JDOW[dow]})</th>`;
+    });
+    html += `</tr></thead><tbody>`;
+
+    // day totals accumulator
+    const dayTotals = {};
+    wdays.forEach(ds => dayTotals[ds] = 0);
+
+    staffList.forEach(s => {
+      const key = `${s.name}||${pid}`;
+      const staffRaw = shiftData[key]  || {};
+      const adminRaw = adminEdits[key] || {};
+      let wh = 0;
+      const cells = wdays.map(ds => {
+        const val = adminRaw[ds] ?? staffRaw[ds] ?? null;
+        if (val) { wh += calcHours(val); dayTotals[ds] += calcHours(val); }
+        return val;
+      });
+
+      const dow0 = new Date(wdays[0]).getDay();
+      html += `<tr>
+  <td class="td-name">${s.name}</td>
+  <td class="td-type">${s.type||''}</td>
+  <td class="td-hours">${wh||'-'}</td>`;
+      cells.forEach((v, ci) => {
+        const ds  = wdays[ci];
+        const dow = new Date(ds).getDay();
+        const cls = dow===0?' class="sun"':dow===6?' class="sat"':'';
+        html += `<td${cls}><span class="shift-val">${v||'-'}</span></td>`;
+      });
+      html += `</tr>`;
+    });
+
+    // PT時數計 row (day totals)
+    html += `<tr class="day-total-row"><td class="td-name">PT時數計</td><td></td><td class="td-hours">${Object.values(dayTotals).reduce((a,b)=>a+b,0)}</td>`;
+    wdays.forEach(ds => {
+      html += `<td>${dayTotals[ds]||'-'}</td>`;
+    });
+    html += `</tr></tbody></table></div>`;
+  });
+
+  html += '</body></html>';
+
+  const w = window.open('','_blank','width=900,height=700');
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 600);
+}
+
+
+// ============================================================
+// PASSWORD
+// ============================================================
+const DEFAULT_PW = 'admin1234';
+function getAdminPw() { return localStorage.getItem('adminPw') || DEFAULT_PW; }
+
+function askAdminPassword() {
+  document.getElementById('pw-input').value = '';
+  document.getElementById('pw-error').textContent = '';
+  document.getElementById('pw-new').value = '';
+  document.getElementById('pw-overlay').classList.add('open');
+  setTimeout(() => document.getElementById('pw-input').focus(), 100);
+}
+
+function closePwOverlay() {
+  document.getElementById('pw-overlay').classList.remove('open');
+}
+
+function checkPassword() {
+  const val = document.getElementById('pw-input').value;
+  if (val === getAdminPw()) {
+    closePwOverlay();
+    goAdmin();
+  } else {
+    const err = document.getElementById('pw-error');
+    err.textContent = '⚠ パスワードが違います';
+    document.getElementById('pw-input').value = '';
+    document.getElementById('pw-input').focus();
+    setTimeout(() => err.textContent = '', 2000);
+  }
+}
+
+function changePassword() {
+  const newPw = document.getElementById('pw-new').value.trim();
+  if (!newPw) { showToast('⚠ 新しいパスワードを入力してください', true); return; }
+  if (newPw.length < 4) { showToast('⚠ 4文字以上にしてください', true); return; }
+  localStorage.setItem('adminPw', newPw);
+  document.getElementById('pw-new').value = '';
+  showToast('✓ パスワードを変更しました');
+}
+
+</script>
+</body>
+</html>
