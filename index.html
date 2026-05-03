@@ -437,23 +437,24 @@ async function syncFromCloud() {
     if (!json.ok) { setLoading(100); return false; }
 
     // periods — normalize dates (GAS may return ISO strings like 2026-05-10T15:00:00.000Z)
+    // Convert any date value to YYYY-MM-DD string
+    // GAS returns Date objects as ISO strings; take the date BEFORE the T to avoid timezone shift
     function toDateStr(v) {
       if (!v) return '';
       const s = String(v).trim();
-      // If pure date string YYYY-MM-DD, use as-is
+      // Already YYYY-MM-DD
       if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-      // If ISO with time e.g. 2026-05-11T15:00:00.000Z, parse using local offset correction
-      if (s.length > 10) {
-        const d = new Date(s);
-        if (!isNaN(d)) {
-          // Use local timezone date to avoid UTC shift
-          const y = d.getFullYear();
-          const m = String(d.getMonth() + 1).padStart(2, '0');
-          const dd = String(d.getDate()).padStart(2, '0');
-          return `${y}-${m}-${dd}`;
-        }
-      }
+      // ISO string: 2026-05-11T15:00:00.000Z — take only the part before T
+      const tIdx = s.indexOf('T');
+      if (tIdx === 10) return s.slice(0, 10);
+      // Fallback
       return s.slice(0, 10);
+    }
+    // Validate that a string is a valid shift time like "12-22"
+    function isValidTime(v) {
+      if (!v) return false;
+      const s = String(v).trim();
+      return /^\d{1,2}-\d{1,2}$/.test(s);
     }
     if (Array.isArray(json.periods) && json.periods.length > 0) {
       periods = json.periods.map(p => ({
@@ -464,23 +465,27 @@ async function syncFromCloud() {
       }));
     }
 
-    // shiftData
+    // shiftData — only store valid time strings like "12-22"
     const sd = {};
     (json.shifts || []).forEach(r => {
       if (!r.name || !r.periodId || !r.date || !r.time) return;
+      const timeStr = String(r.time).trim();
+      if (!isValidTime(timeStr)) return; // skip bad values (Date objects, etc.)
       const k = `${r.name}||${r.periodId}`;
       if (!sd[k]) sd[k] = {};
-      sd[k][toDateStr(r.date)] = String(r.time);
+      sd[k][toDateStr(r.date)] = timeStr;
     });
     shiftData = sd;
 
-    // adminEdits
+    // adminEdits — only store valid time strings
     const ae = {};
     (json.adminEdits || []).forEach(r => {
       if (!r.name || !r.periodId || !r.date) return;
+      const timeStr = String(r.time || '').trim();
+      if (!isValidTime(timeStr)) return;
       const k = `${r.name}||${r.periodId}`;
       if (!ae[k]) ae[k] = {};
-      if (r.time) ae[k][toDateStr(r.date)] = String(r.time);
+      ae[k][toDateStr(r.date)] = timeStr;
     });
     adminEdits = ae;
 
