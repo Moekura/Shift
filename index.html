@@ -436,13 +436,17 @@ async function syncFromCloud() {
     const json = await res.json();
     if (!json.ok) { setLoading(100); return false; }
 
-    // periods
+    // periods — normalize dates (GAS may return ISO strings like 2026-05-10T15:00:00.000Z)
+    function toDateStr(v) {
+      const s = String(v ?? '');
+      return s.length >= 10 ? s.slice(0, 10) : s;
+    }
     if (Array.isArray(json.periods) && json.periods.length > 0) {
       periods = json.periods.map(p => ({
-        id:    String(p.id    ?? ''),
-        name:  String(p.name  ?? ''),
-        start: String(p.start ?? ''),
-        end:   String(p.end   ?? ''),
+        id:    String(p.id   ?? ''),
+        name:  String(p.name ?? ''),
+        start: toDateStr(p.start),
+        end:   toDateStr(p.end),
       }));
     }
 
@@ -452,7 +456,7 @@ async function syncFromCloud() {
       if (!r.name || !r.periodId || !r.date || !r.time) return;
       const k = `${r.name}||${r.periodId}`;
       if (!sd[k]) sd[k] = {};
-      sd[k][String(r.date)] = String(r.time);
+      sd[k][toDateStr(r.date)] = String(r.time);
     });
     shiftData = sd;
 
@@ -462,7 +466,7 @@ async function syncFromCloud() {
       if (!r.name || !r.periodId || !r.date) return;
       const k = `${r.name}||${r.periodId}`;
       if (!ae[k]) ae[k] = {};
-      if (r.time) ae[k][String(r.date)] = String(r.time);
+      if (r.time) ae[k][toDateStr(r.date)] = String(r.time);
     });
     adminEdits = ae;
 
