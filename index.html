@@ -438,8 +438,22 @@ async function syncFromCloud() {
 
     // periods — normalize dates (GAS may return ISO strings like 2026-05-10T15:00:00.000Z)
     function toDateStr(v) {
-      const s = String(v ?? '');
-      return s.length >= 10 ? s.slice(0, 10) : s;
+      if (!v) return '';
+      const s = String(v).trim();
+      // If pure date string YYYY-MM-DD, use as-is
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      // If ISO with time e.g. 2026-05-11T15:00:00.000Z, parse using local offset correction
+      if (s.length > 10) {
+        const d = new Date(s);
+        if (!isNaN(d)) {
+          // Use local timezone date to avoid UTC shift
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          return `${y}-${m}-${dd}`;
+        }
+      }
+      return s.slice(0, 10);
     }
     if (Array.isArray(json.periods) && json.periods.length > 0) {
       periods = json.periods.map(p => ({
