@@ -681,39 +681,64 @@ function save() {
   localStorage.setItem('periods',    JSON.stringify(periods));
 }
 
-// Send staff shift data to Google Sheets
-async function syncToCloud(name, periodId, periodName, days) {
+// ── CLOUD SYNC ──────────────────────────────────────────────
+async function cloudPost(body) {
   try {
-    const res = await fetch(GAS_URL, {
-      method: 'POST',
-      body: JSON.stringify({name, periodId, periodName, days}),
-    });
+    const res = await fetch(GAS_URL, {method:'POST', body: JSON.stringify(body)});
     const json = await res.json();
     return json.ok;
-  } catch(e) {
-    return false;
-  }
+  } catch(e) { return false; }
 }
 
-// Load all shift data from Google Sheets into local state
+async function syncToCloud(name, periodId, periodName, days) {
+  return cloudPost({action:'submitShift', name, periodId, periodName, days});
+}
+
+async function savePeriodCloud() {
+  return cloudPost({action:'savePeriods', periods});
+}
+
+async function saveAdminEditsCloud(name, periodId, days) {
+  return cloudPost({action:'saveAdminEdits', name, periodId, days});
+}
+
 async function syncFromCloud() {
   try {
     const res = await fetch(GAS_URL);
     const json = await res.json();
     if (!json.ok) return false;
-    // Rebuild shiftData from cloud rows
+
+    // Rebuild periods
+    if (json.periods && json.periods.length) {
+      periods = json.periods.map(p => ({
+        id: String(p.id), name: String(p.name),
+        start: String(p.start), end: String(p.end)
+      }));
+      localStorage.setItem('periods', JSON.stringify(periods));
+    }
+
+    // Rebuild shiftData
     const newShiftData = {};
-    json.data.forEach(row => {
+    (json.shifts || []).forEach(row => {
       const key = `${row.name}||${row.periodId}`;
       if (!newShiftData[key]) newShiftData[key] = {};
-      if (row.date && row.time) newShiftData[key][row.date] = row.time;
+      if (row.date && row.time) newShiftData[key][String(row.date)] = String(row.time);
     });
     shiftData = newShiftData;
     localStorage.setItem('shiftData', JSON.stringify(shiftData));
+
+    // Rebuild adminEdits
+    const newAdminEdits = {};
+    (json.adminEdits || []).forEach(row => {
+      const key = `${row.name}||${row.periodId}`;
+      if (!newAdminEdits[key]) newAdminEdits[key] = {};
+      if (row.date && row.time) newAdminEdits[key][String(row.date)] = String(row.time);
+    });
+    adminEdits = newAdminEdits;
+    localStorage.setItem('adminEdits', JSON.stringify(adminEdits));
+
     return true;
-  } catch(e) {
-    return false;
-  }
+  } catch(e) { return false; }
 }
 
 // ============================================================
@@ -766,9 +791,11 @@ function switchTab(tab, el) {
 // ============================================================
 let selName = null, selPeriodId = null, selDays = {}, popupDate = null;
 
-function goStaff() {
+async function goStaff() {
   showScreen('staff');
   selName = null; selPeriodId = null; selDays = {};
+  // sync periods from cloud so staff sees latest periods
+  await syncFromCloud();
 
   // render name grid
   const g = document.getElementById('name-grid');
@@ -1151,6 +1178,11 @@ function saveAdminEdits() {
       else adminEdits[key][date] = val;
     });
   });
+  // sync each changed key to cloud
+  Object.keys(adminEdits).forEach(key => {
+    const parts = key.split('||');
+    saveAdminEditsCloud(parts[0], parts[1], adminEdits[key]);
+  });
   pendingEdits = {};
   save(); showToast('✓ 排班を保存しました');
   renderAdminTable();
@@ -1235,7 +1267,11 @@ function createPeriod() {
   if (end < start) { showToast('⚠ 終了日は開始日以降にしてください', true); return; }
   const id = 'p_' + Date.now();
   periods.push({id, name, start, end});
-  save(); renderPeriodList(); renderAdminPeriodSel();
+  save();
+  savePeriodCloud().then(ok => {
+    if (!ok) showToast('⚠ クラウド同期失敗', true);
+  });
+  renderPeriodList(); renderAdminPeriodSel();
   document.getElementById('np-name').value = '';
   document.getElementById('np-start').value = '';
   document.getElementById('np-end').value = '';
@@ -1262,7 +1298,9 @@ function deletePeriod(id, e) {
   periods = periods.filter(p => p.id !== id);
   Object.keys(shiftData).forEach(k  => { if (k.includes(`||${id}`)) delete shiftData[k]; });
   Object.keys(adminEdits).forEach(k => { if (k.includes(`||${id}`)) delete adminEdits[k]; });
-  save(); renderPeriodList(); renderAdminPeriodSel(); renderAdminTable();
+  save();
+  savePeriodCloud();
+  renderPeriodList(); renderAdminPeriodSel(); renderAdminTable();
   showToast('削除しました');
 }
 
