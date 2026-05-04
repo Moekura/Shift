@@ -489,6 +489,14 @@ async function syncFromCloud() {
     });
     adminEdits = ae;
 
+    // staffList — sync from cloud if available
+    if (Array.isArray(json.staffList) && json.staffList.length > 0) {
+      staffList = json.staffList.map(s => ({
+        name: String(s.name || ''),
+        type: String(s.type || ''),
+      })).filter(s => s.name);
+    }
+
     saveLocal();
     setLoading(100);
     return true;
@@ -997,17 +1005,21 @@ function renderStaffSettings() {
 }
 function addStaffRow()  { staffList.push({name:'',type:''}); renderStaffSettings(); }
 function removeStaff(i) { staffList.splice(i,1); renderStaffSettings(); }
-function saveStaffList() {
+async function saveStaffList() {
   staffList = staffList.map((_,i) => ({
     name: document.getElementById(`sn-${i}`).value.trim(),
     type: document.getElementById(`st-${i}`).value,
   })).filter(s => s.name);
-  saveLocal(); showToast('✓ 保存しました');
+  saveLocal();
+  const ok = await cloudPost({action:'saveStaffList', staffList});
+  showToast(ok ? '✓ 保存しました（クラウド同期済）' : '⚠ ローカルのみ保存（クラウド失敗）', !ok);
 }
-function resetStaffList() {
+async function resetStaffList() {
   if (!confirm('デフォルトにリセットしますか？')) return;
   staffList = JSON.parse(JSON.stringify(DEFAULT_STAFF));
-  saveLocal(); renderStaffSettings(); showToast('リセットしました');
+  saveLocal();
+  await cloudPost({action:'saveStaffList', staffList});
+  renderStaffSettings(); showToast('リセットしました');
 }
 
 // ============================================================
