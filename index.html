@@ -916,19 +916,29 @@ function onCellInput(el) {
 }
 
 async function saveAdminEdits() {
+  // Collect which keys changed
+  const changedKeys = new Set(Object.keys(pendingEdits));
+
+  // Apply pending edits to adminEdits (empty/"-" = delete that date)
   Object.entries(pendingEdits).forEach(([key, dates]) => {
     if (!adminEdits[key]) adminEdits[key] = {};
     Object.entries(dates).forEach(([date, val]) => {
       if (!val || val === '-') delete adminEdits[key][date];
       else adminEdits[key][date] = val;
     });
+    // If all dates removed, clean up the key
+    if (Object.keys(adminEdits[key]).length === 0) delete adminEdits[key];
   });
+
   saveLocal();
-  // sync each key to cloud
-  const promises = Object.entries(adminEdits).map(([key, days]) => {
+
+  // Sync only changed keys to cloud (send current state, empty object = all deleted)
+  const promises = [...changedKeys].map(key => {
     const [name, periodId] = key.split('||');
+    const days = adminEdits[key] || {}; // empty {} means "clear all for this staff+period"
     return cloudPost({action:'saveAdminEdits', name, periodId, days});
   });
+
   const results = await Promise.all(promises);
   pendingEdits = {};
   showToast(results.every(Boolean) ? '✓ 排班を保存しました' : '⚠ 一部クラウド保存失敗', !results.every(Boolean));
