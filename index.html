@@ -916,27 +916,26 @@ function onCellInput(el) {
 }
 
 async function saveAdminEdits() {
-  // Collect which keys changed
-  const changedKeys = new Set(Object.keys(pendingEdits));
+  const pid = document.getElementById('admin-period-sel').value;
 
-  // Apply pending edits to adminEdits (empty/"-" = delete that date)
+  // Apply pending edits locally
   Object.entries(pendingEdits).forEach(([key, dates]) => {
     if (!adminEdits[key]) adminEdits[key] = {};
     Object.entries(dates).forEach(([date, val]) => {
       if (!val || val === '-') delete adminEdits[key][date];
       else adminEdits[key][date] = val;
     });
-    // If all dates removed, clean up the key
     if (Object.keys(adminEdits[key]).length === 0) delete adminEdits[key];
   });
 
   saveLocal();
 
-  // Sync only changed keys to cloud (send current state, empty object = all deleted)
-  const promises = [...changedKeys].map(key => {
-    const [name, periodId] = key.split('||');
-    const days = adminEdits[key] || {}; // empty {} means "clear all for this staff+period"
-    return cloudPost({action:'saveAdminEdits', name, periodId, days});
+  // Send full state for ALL staff in this period to GAS.
+  // Each call: GAS deletes all rows for that name+period, then inserts current non-empty values.
+  const promises = staffList.map(s => {
+    const key = `${s.name}||${pid}`;
+    const days = adminEdits[key] || {};
+    return cloudPost({action:'saveAdminEdits', name: s.name, periodId: pid, days});
   });
 
   const results = await Promise.all(promises);
