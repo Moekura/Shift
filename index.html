@@ -105,14 +105,24 @@ async function save(){
     grouped[name].days[date]=pending[k];
   });
 
-  await fetch(API_URL,{
+  const payload = {
+    action:'saveAdminEditsBulk',
+    periodId:pid,
+    allEdits:Object.values(grouped)
+  };
+
+  // 🔥 這行就是你要看的（不要刪）
+  console.log("送出資料:", JSON.stringify(payload));
+
+  const res = await fetch(API_URL,{
     method:'POST',
-    body:JSON.stringify({
-      action:'saveAdminEditsBulk',
-      periodId:pid,
-      allEdits:Object.values(grouped)
-    })
+    body:JSON.stringify(payload)
   });
+
+  const result = await res.text();
+
+  // 🔥 看後端有沒有回應
+  console.log("後端回傳:", result);
 
   pending = {};
   alert('已保存');
