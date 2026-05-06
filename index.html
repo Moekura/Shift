@@ -930,17 +930,16 @@ async function saveAdminEdits() {
 
   saveLocal();
 
-  // Send full state for ALL staff in this period to GAS.
-  // Each call: GAS deletes all rows for that name+period, then inserts current non-empty values.
-  const promises = staffList.map(s => {
+  // Build full payload for this period: all staff in one request
+  const allEdits = staffList.map(s => {
     const key = `${s.name}||${pid}`;
-    const days = adminEdits[key] || {};
-    return cloudPost({action:'saveAdminEdits', name: s.name, periodId: pid, days});
+    return { name: s.name, days: adminEdits[key] || {} };
   });
 
-  const results = await Promise.all(promises);
+  const ok = await cloudPost({ action: 'saveAdminEditsBulk', periodId: pid, allEdits });
+
   pendingEdits = {};
-  showToast(results.every(Boolean) ? '✓ 排班を保存しました' : '⚠ 一部クラウド保存失敗', !results.every(Boolean));
+  showToast(ok ? '✓ 排班を保存しました' : '⚠ クラウド保存失敗', !ok);
   renderAdminTable();
 }
 
