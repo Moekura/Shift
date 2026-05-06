@@ -922,8 +922,11 @@ async function saveAdminEdits() {
   Object.entries(pendingEdits).forEach(([key, dates]) => {
     if (!adminEdits[key]) adminEdits[key] = {};
     Object.entries(dates).forEach(([date, val]) => {
-      if (!val || val === '-') delete adminEdits[key][date];
-      else adminEdits[key][date] = val;
+      if (val === '-') {
+  delete adminEdits[key][date];
+} else {
+  adminEdits[key][date] = val; // ✅ 空字串也存
+}
     });
     if (Object.keys(adminEdits[key]).length === 0) delete adminEdits[key];
   });
