@@ -40,28 +40,7 @@ function renderSelect(){
   period.onchange = render;
 }
 
-function getValue(name,periodId,date){
-  const key = `${name}_${periodId}_${date}`;
 
-  if(key in pending){
-    return pending[key];
-  }
-
-  const admin = adminEdits.find(r =>
-    r.name===name && r.periodId===periodId && r.date===date
-  );
-
-  if(admin){
-    if(admin.time === DELETE_MARK) return '';
-    return admin.time;
-  }
-
-  const shift = shifts.find(r =>
-    r.name===name && r.periodId===periodId && r.date===date
-  );
-
-  return shift ? shift.time : '';
-}
 
 function render(){
   const name = staff.value;
@@ -82,7 +61,36 @@ function render(){
         <td>
           <input value="${val}"
             onchange="update('${name}','${pid}','${date}',this.value)">
-        </td>
+  function getValue(name,periodId,date){
+  const key = `${name}_${periodId}_${date}`;
+
+  if(key in pending){
+    return pending[key];
+  }
+
+  const admin = adminEdits.find(r =>
+    r.name===name && r.periodId===periodId && r.date===date
+  );
+
+  if(admin){
+    const t = (admin.time || '').trim();
+
+    if(t === DELETE_MARK){
+      return '';
+    }
+
+    if(t !== ''){
+      return t;
+    }
+  }
+
+  const shift = shifts.find(r =>
+    r.name===name && r.periodId===periodId && r.date===date
+  );
+
+  return shift ? shift.time : '';
+}
+</td>
       </tr>`;
   }
 }
