@@ -1,143 +1,133 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
+  <meta charset="UTF-8">
+  <title>Shift Admin</title>
 </head>
 <body>
 
 <select id="staff"></select>
 <select id="period"></select>
-<table id="table" border="1"></table>
 <button onclick="save()">保存</button>
 
+<div id="table"></div>
+
 <script>
-const API_URL = "你的GAS網址";
-const DELETE_MARK = "__DELETE__";
+const API_URL = "https://script.google.com/macros/s/AKfycbw8zLwCD54EYitPRno2ZxKTpXgWV1GQaU2Z82Vgt4CV9274dV91XsGEtMHKvHZ03J31_w/exec";
 
-let shifts = [];
-let adminEdits = [];
-let periods = [];
-let staffList = [];
-let pending = {};
+let currentData = {};
 
-async function init(){
-  const res = await fetch(API_URL);
-  const data = await res.json();
+function buildShiftMap(shifts, adminEdits) {
+  const map = {};
 
-  shifts = data.shifts || [];
-  adminEdits = data.adminEdits || [];
-  periods = data.periods || [];
-  staffList = data.staffList || [];
+  shifts.forEach(s => {
+    const key = `${s.name}||${s.periodId}||${s.date}`;
+    map[key] = s.time;
+  });
 
-  renderSelect();
-  render();
+  adminEdits.forEach(a => {
+    const key = `${a.name}||${a.periodId}||${a.date}`;
+    if (a.time === '__DELETE__') {
+      delete map[key];
+    } else {
+      map[key] = a.time;
+    }
+  });
+
+  return map;
 }
 
-function renderSelect(){
-  staff.innerHTML = staffList.map(s=>`<option>${s.name}</option>`).join('');
-  period.innerHTML = periods.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
-  staff.onchange = render;
-  period.onchange = render;
+function load() {
+  fetch(API_URL)
+    .then(r => r.json())
+    .then(data => {
+      currentData = data;
+
+      console.log("DATA:", data);
+
+      initSelect(data);
+      render();
+    });
 }
 
+function initSelect(data) {
+  const staff = document.getElementById("staff");
+  const period = document.getElementById("period");
 
+  staff.innerHTML = data.staffList.map(s =>
+    `<option value="${s.name}">${s.name}</option>`
+  ).join("");
 
-function render(){
-  const name = staff.value;
-  const pid = period.value;
+  period.innerHTML = data.periods.map(p =>
+    `<option value="${p.id}">${p.name}</option>`
+  ).join("");
+}
 
-  table.innerHTML = '';
+function render() {
+  const name = document.getElementById("staff").value;
+  const periodId = document.getElementById("period").value;
 
-  for(let i=0;i<7;i++){
-    const d = new Date();
-    d.setDate(d.getDate()+i);
-    const date = d.toISOString().slice(0,10);
+  const shiftMap = buildShiftMap(currentData.shifts, currentData.adminEdits);
 
-    const val = getValue(name,pid,date);
+  const dates = [...new Set(currentData.shifts.map(s => s.date))];
 
-    table.innerHTML += `
+  let html = "<table border='1'><tr><th>日期</th><th>時間</th></tr>";
+
+  dates.forEach(d => {
+    const key = `${name}||${periodId}||${d}`;
+    const time = shiftMap[key] ?? '';
+
+    html += `
       <tr>
-        <td>${date}</td>
+        <td>${d}</td>
         <td>
-          <input value="${val}"
-            onchange="update('${name}','${pid}','${date}',this.value)">
-  function getValue(name,periodId,date){
-  const key = `${name}_${periodId}_${date}`;
-
-  if(key in pending){
-    return pending[key];
-  }
-
-  const admin = adminEdits.find(r =>
-    r.name===name && r.periodId===periodId && r.date===date
-  );
-
-  if(admin){
-    const t = (admin.time || '').trim();
-
-    if(t === DELETE_MARK){
-      return '';
-    }
-
-    if(t !== ''){
-      return t;
-    }
-  }
-
-  const shift = shifts.find(r =>
-    r.name===name && r.periodId===periodId && r.date===date
-  );
-
-  return shift ? shift.time : '';
-}
-</td>
-      </tr>`;
-  }
-}
-
-function update(name,pid,date,val){
-  const key = `${name}_${pid}_${date}`;
-  pending[key] = val === '' ? '' : val;
-}
-
-async function save(){
-  const pid = period.value;
-
-  const grouped = {};
-
-  Object.keys(pending).forEach(k=>{
-    const [name,pid2,date] = k.split('_');
-    if(pid2!==pid) return;
-
-    if(!grouped[name]) grouped[name]={name,days:{}};
-    grouped[name].days[date]=pending[k];
+          <input value="${time}" data-date="${d}">
+        </td>
+      </tr>
+    `;
   });
 
-  const payload = {
-    action:'saveAdminEditsBulk',
-    periodId:pid,
-    allEdits:Object.values(grouped)
-  };
+  html += "</table>";
 
-  // 🔥 這行就是你要看的（不要刪）
-  console.log("送出資料:", JSON.stringify(payload));
-
-  const res = await fetch(API_URL,{
-    method:'POST',
-    body:JSON.stringify(payload)
-  });
-
-  const result = await res.text();
-
-  // 🔥 看後端有沒有回應
-  console.log("後端回傳:", result);
-
-  pending = {};
-  alert('已保存');
-  init();
+  document.getElementById("table").innerHTML = html;
 }
 
-init();
+function save() {
+  const name = document.getElementById("staff").value;
+  const periodId = document.getElementById("period").value;
+
+  const inputs = document.querySelectorAll("input");
+
+  const days = {};
+
+  inputs.forEach(i => {
+    const val = i.value.trim();
+
+    if (val === '') {
+      days[i.dataset.date] = '__DELETE__';
+    } else {
+      days[i.dataset.date] = val;
+    }
+  });
+
+  fetch(API_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      action: "saveAdminEdits",
+      name,
+      periodId,
+      days
+    })
+  }).then(() => {
+    alert("已保存");
+    load();
+  });
+}
+
+document.getElementById("staff").onchange = render;
+document.getElementById("period").onchange = render;
+
+load();
 </script>
 
 </body>
