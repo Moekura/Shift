@@ -15,19 +15,45 @@
 <script>
 const API_URL = "https://script.google.com/macros/s/AKfycbw8zLwCD54EYitPRno2ZxKTpXgWV1GQaU2Z82Vgt4CV9274dV91XsGEtMHKvHZ03J31_w/exec";
 
-let currentData = {};
+let DATA = {};
 
-function buildShiftMap(shifts, adminEdits) {
+function load() {
+  fetch(API_URL)
+    .then(r => r.json())
+    .then(d => {
+      DATA = d;
+      initSelect();
+      render();
+    });
+}
+
+function initSelect() {
+  const staff = document.getElementById("staff");
+  const period = document.getElementById("period");
+
+  staff.innerHTML = DATA.staffList.map(s =>
+    "<option value='" + s.name + "'>" + s.name + "</option>"
+  ).join("");
+
+  period.innerHTML = DATA.periods.map(p =>
+    "<option value='" + p.id + "'>" + p.name + "</option>"
+  ).join("");
+}
+
+function buildMap() {
   const map = {};
 
-  shifts.forEach(s => {
-    const key = `${s.name}||${s.periodId}||${s.date}`;
+  // 原始 shift
+  DATA.shifts.forEach(s => {
+    const key = s.name + "||" + s.periodId + "||" + s.date;
     map[key] = s.time;
   });
 
-  adminEdits.forEach(a => {
-    const key = `${a.name}||${a.periodId}||${a.date}`;
-    if (a.time === '__DELETE__') {
+  // admin 覆蓋
+  DATA.adminEdits.forEach(a => {
+    const key = a.name + "||" + a.periodId + "||" + a.date;
+
+    if (a.time === "__DELETE__") {
       delete map[key];
     } else {
       map[key] = a.time;
@@ -37,54 +63,30 @@ function buildShiftMap(shifts, adminEdits) {
   return map;
 }
 
-function load() {
-  fetch(API_URL)
-    .then(r => r.json())
-    .then(data => {
-      currentData = data;
-
-      console.log("DATA:", data);
-
-      initSelect(data);
-      render();
-    });
-}
-
-function initSelect(data) {
-  const staff = document.getElementById("staff");
-  const period = document.getElementById("period");
-
-  staff.innerHTML = data.staffList.map(s =>
-    `<option value="${s.name}">${s.name}</option>`
-  ).join("");
-
-  period.innerHTML = data.periods.map(p =>
-    `<option value="${p.id}">${p.name}</option>`
-  ).join("");
-}
-
 function render() {
   const name = document.getElementById("staff").value;
   const periodId = document.getElementById("period").value;
 
-  const shiftMap = buildShiftMap(currentData.shifts, currentData.adminEdits);
+  const map = buildMap();
 
-  const dates = [...new Set(currentData.shifts.map(s => s.date))];
+  const dates = [];
+  DATA.shifts.forEach(s => {
+    if (dates.indexOf(s.date) === -1) {
+      dates.push(s.date);
+    }
+  });
 
-  let html = "<table border='1'><tr><th>日期</th><th>時間</th></tr>";
+  let html = "<table border='1'>";
+  html += "<tr><th>日期</th><th>時間</th></tr>";
 
   dates.forEach(d => {
-    const key = `${name}||${periodId}||${d}`;
-    const time = shiftMap[key] ?? '';
+    const key = name + "||" + periodId + "||" + d;
+    const time = map[key] || "";
 
-    html += `
-      <tr>
-        <td>${d}</td>
-        <td>
-          <input value="${time}" data-date="${d}">
-        </td>
-      </tr>
-    `;
+    html += "<tr>";
+    html += "<td>" + d + "</td>";
+    html += "<td><input data-date='" + d + "' value='" + time + "'></td>";
+    html += "</tr>";
   });
 
   html += "</table>";
@@ -103,8 +105,8 @@ function save() {
   inputs.forEach(i => {
     const val = i.value.trim();
 
-    if (val === '') {
-      days[i.dataset.date] = '__DELETE__';
+    if (val === "") {
+      days[i.dataset.date] = "__DELETE__";
     } else {
       days[i.dataset.date] = val;
     }
@@ -114,9 +116,9 @@ function save() {
     method: "POST",
     body: JSON.stringify({
       action: "saveAdminEdits",
-      name,
-      periodId,
-      days
+      name: name,
+      periodId: periodId,
+      days: days
     })
   }).then(() => {
     alert("已保存");
