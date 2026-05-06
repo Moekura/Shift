@@ -843,7 +843,9 @@ function renderAdminTable() {
           bHTML += sv ? `<td><span class="sc sc-staff">${sv}</span></td>` : `<td style="color:#ccc;font-size:.7rem">-</td>`;
         } else {
           const pv = pendingEdits[key]?.[ds];
-          const dv = pv !== undefined ? pv : (ar[ds] ?? sv ?? '');
+          const dv = pv !== undefined
+  ? pv
+  : (ar.hasOwnProperty(ds) ? ar[ds] : (sv ?? ''));
           let warn = false;
           if (dv) {
             const m = dv.match(/^(\d{1,2})-(\d{1,2})$/);
