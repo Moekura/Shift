@@ -477,12 +477,13 @@ async function syncFromCloud() {
     });
     shiftData = sd;
 
-    // adminEdits — only store valid time strings
+    // adminEdits — store valid time strings AND explicit "-" (means cleared by admin)
     const ae = {};
     (json.adminEdits || []).forEach(r => {
       if (!r.name || !r.periodId || !r.date) return;
-      const timeStr = String(r.time || '').trim();
-      if (!isValidTime(timeStr)) return;
+      const timeStr = String(r.time ?? '').trim();
+      // Accept valid times (e.g. "12-22") OR explicit clear marker "-"
+      if (!isValidTime(timeStr) && timeStr !== '-') return;
       const k = `${r.name}||${r.periodId}`;
       if (!ae[k]) ae[k] = {};
       ae[k][toDateStr(r.date)] = timeStr;
@@ -832,7 +833,8 @@ function renderAdminTable() {
         const val = adminView === 'admin'
           ? (pendingEdits[key]?.[ds] !== undefined ? pendingEdits[key][ds] : (ar[ds] ?? sr[ds]))
           : sr[ds];
-        if (val) { const h = calcHours(val); wh += h; dayTotals[ds] += h; daysSet.add(ds); }
+        // "-" = explicitly cleared by admin, skip from totals
+        if (val && val !== '-') { const h = calcHours(val); wh += h; dayTotals[ds] += h; daysSet.add(ds); }
       });
       grandH += wh; weekTotals[wi] += wh;
       const bl = wi > 0 ? 'border-left:2px solid var(--teal);' : '';
@@ -843,9 +845,14 @@ function renderAdminTable() {
           bHTML += sv ? `<td><span class="sc sc-staff">${sv}</span></td>` : `<td style="color:#ccc;font-size:.7rem">-</td>`;
         } else {
           const pv = pendingEdits[key]?.[ds];
-          const dv = pv !== undefined
-  ? pv
-  : (ar.hasOwnProperty(ds) ? ar[ds] : (sv ?? ''));
+          // Raw stored value: pending > adminEdit > staffShift
+          const rawVal = pv !== undefined
+            ? pv
+            : (ar.hasOwnProperty(ds) ? ar[ds] : (sv ?? ''));
+          // "-" means explicitly cleared by admin → show empty in input
+          const dv = (rawVal === '-') ? '' : rawVal;
+          // Whether admin has explicitly cleared this date (overrides staff value)
+          const isCleared = rawVal === '-';
           let warn = false;
           if (dv) {
             const m = dv.match(/^(\d{1,2})-(\d{1,2})$/);
@@ -854,9 +861,11 @@ function renderAdminTable() {
               else { const sp = sv.split('-'); if (parseInt(m[1])<parseInt(sp[0])||parseInt(m[2])>parseInt(sp[1])) warn=true; }
             }
           }
-          bHTML += `<td class="edit-cell"><input class="${warn?'warn':''}"
-            data-key="${key}" data-date="${ds}" data-staff="${sv||''}"
-            value="${dv}" placeholder="-"
+          // Show a subtle indicator when admin has cleared a staff-submitted value
+          const clearedStyle = (isCleared && sv) ? 'background:var(--rbg);' : '';
+          bHTML += `<td class="edit-cell" style="${clearedStyle}"><input class="${warn?'warn':''}"
+            data-key="${key}" data-date="${ds}" data-staff="${sv||''}" data-cleared="${isCleared}"
+            value="${dv}" placeholder="${isCleared ? '✕' : '-'}"
             oninput="onCellInput(this)" onfocus="this.select()"></td>`;
         }
       });
@@ -908,8 +917,9 @@ function onCellInput(el) {
     let wh = 0;
     wd.forEach(ds => {
       const pv = pendingEdits[key]?.[ds];
-      const v = pv !== undefined ? pv : (ar[ds] ?? sr[ds]);
-      if (v) wh += calcHours(v);
+      const rawV = pv !== undefined ? pv : (ar[ds] ?? sr[ds]);
+      // "-" = explicitly cleared, skip
+      if (rawV && rawV !== '-') wh += calcHours(rawV);
     });
     const tds = row.querySelectorAll('td');
     if (tds[col]) tds[col].textContent = wh || '-';
@@ -924,13 +934,10 @@ async function saveAdminEdits() {
   Object.entries(pendingEdits).forEach(([key, dates]) => {
     if (!adminEdits[key]) adminEdits[key] = {};
     Object.entries(dates).forEach(([date, val]) => {
-      if (val === '-') {
-  delete adminEdits[key][date];
-} else {
-  adminEdits[key][date] = val; // ✅ 空字串也存
-}
+      // Empty string input → treat as explicit clear "-"
+      const normalized = (val === '' || val === null || val === undefined) ? '-' : val;
+      adminEdits[key][date] = normalized;
     });
-    if (Object.keys(adminEdits[key]).length === 0) delete adminEdits[key];
   });
 
   saveLocal();
@@ -1165,7 +1172,7 @@ function exportExcel() {
     const row=[{v:s.type||''},{v:s.name}];
     weeks.forEach(wd=>{
       let wh=0;const vals=[];
-      wd.forEach(ds=>{const v=ar[ds]??sr[ds];vals.push(v?{v}:null);if(v)wh+=calcHours(v);});
+      wd.forEach(ds=>{const raw=ar[ds]??sr[ds];const v=(raw&&raw!=='-')?raw:null;vals.push(v?{v}:null);if(v)wh+=calcHours(v);});
       row.push({v:wh,t:'n'});vals.forEach(v=>row.push(v));
     });
     rows.push(row);
@@ -1174,7 +1181,7 @@ function exportExcel() {
   const tRow=[null,{v:'PT時數'}];
   weeks.forEach(wd=>{
     let wt=0;const dv=[];
-    wd.forEach(ds=>{let dt=0;staffList.forEach(s=>{const key=`${s.name}||${pid}`;const v=(adminEdits[key]||{})[ds]??(shiftData[key]||{})[ds];if(v)dt+=calcHours(v);});wt+=dt;dv.push(dt>0?{v:dt,t:'n'}:null);});
+    wd.forEach(ds=>{let dt=0;staffList.forEach(s=>{const key=`${s.name}||${pid}`;const raw=(adminEdits[key]||{})[ds]??(shiftData[key]||{})[ds];if(raw&&raw!=='-')dt+=calcHours(raw);});wt+=dt;dv.push(dt>0?{v:dt,t:'n'}:null);});
     tRow.push({v:wt,t:'n'});dv.forEach(v=>tRow.push(v));
   });
   rows.push(tRow);
