@@ -145,6 +145,13 @@ select:focus,input:focus{border-color:var(--yellow);}
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;}
 
 .table-wrap{overflow-x:auto;border:1px solid var(--border);}
+.th-name,.th-type{position:sticky;z-index:3;background:var(--black);}
+.th-name{left:0;min-width:90px;}
+.th-type{left:90px;min-width:52px;}
+td.td-name{position:sticky;left:0;z-index:2;background:var(--white);box-shadow:2px 0 4px rgba(0,0,0,.08);}
+td.td-type{position:sticky;left:90px;z-index:2;background:var(--white);}
+tr:hover td.td-name,tr:hover td.td-type{background:#fafafa;}
+.total-row td.td-name,.total-row td.td-type{background:#efefef;}
 table{width:100%;border-collapse:collapse;font-size:.75rem;white-space:nowrap;}
 th{background:var(--black);padding:8px 9px;text-align:center;border-right:1px solid #333;color:#fff;font-weight:700;font-size:.7rem;letter-spacing:.03em;}
 th.th-name{text-align:left;min-width:90px;}
@@ -477,12 +484,11 @@ async function syncFromCloud() {
     });
     shiftData = sd;
 
-    // adminEdits — store valid time strings AND explicit "-" (means cleared by admin)
+    // adminEdits — accept valid times AND explicit clear marker "-"
     const ae = {};
     (json.adminEdits || []).forEach(r => {
       if (!r.name || !r.periodId || !r.date) return;
       const timeStr = String(r.time ?? '').trim();
-      // Accept valid times (e.g. "12-22") OR explicit clear marker "-"
       if (!isValidTime(timeStr) && timeStr !== '-') return;
       const k = `${r.name}||${r.periodId}`;
       if (!ae[k]) ae[k] = {};
@@ -799,7 +805,7 @@ function renderAdminTable() {
   const weeks = getWeeks(days);
 
   // Header row1: week groups
-  let h1 = '<tr><th class="th-name" rowspan="2">氏名</th><th rowspan="2">形態</th>';
+  let h1 = '<tr><th class="th-name" rowspan="2">氏名</th><th class="th-type" rowspan="2">形態</th>';
   let h2 = '<tr>';
   weeks.forEach((wd, wi) => {
     const bl = wi > 0 ? 'border-left:2px solid var(--teal);' : '';
@@ -825,6 +831,8 @@ function renderAdminTable() {
     const key = `${s.name}||${pid}`;
     const sr = shiftData[key]  || {};
     const ar = adminEdits[key] || {};
+    // 店長・社員は総計から除外（PT/アルバイトのみ集計）
+    const excludeFromTotal = (s.type === '店長' || s.type === '社員');
     bHTML += `<tr><td class="td-name">${s.name}</td><td class="td-type">${s.type||''}</td>`;
     let grandH = 0;
     weeks.forEach((wd, wi) => {
@@ -833,10 +841,13 @@ function renderAdminTable() {
         const val = adminView === 'admin'
           ? (pendingEdits[key]?.[ds] !== undefined ? pendingEdits[key][ds] : (ar[ds] ?? sr[ds]))
           : sr[ds];
-        // "-" = explicitly cleared by admin, skip from totals
-        if (val && val !== '-') { const h = calcHours(val); wh += h; dayTotals[ds] += h; daysSet.add(ds); }
+        if (val && val !== '-') {
+          const h = calcHours(val); wh += h;
+          if (!excludeFromTotal) { dayTotals[ds] += h; daysSet.add(ds); }
+        }
       });
-      grandH += wh; weekTotals[wi] += wh;
+      grandH += wh;
+      if (!excludeFromTotal) weekTotals[wi] += wh;
       const bl = wi > 0 ? 'border-left:2px solid var(--teal);' : '';
       bHTML += `<td class="td-hours" style="${bl}">${wh||'-'}</td>`;
       wd.forEach(ds => {
@@ -845,14 +856,9 @@ function renderAdminTable() {
           bHTML += sv ? `<td><span class="sc sc-staff">${sv}</span></td>` : `<td style="color:#ccc;font-size:.7rem">-</td>`;
         } else {
           const pv = pendingEdits[key]?.[ds];
-          // Raw stored value: pending > adminEdit > staffShift
-          const rawVal = pv !== undefined
-            ? pv
-            : (ar.hasOwnProperty(ds) ? ar[ds] : (sv ?? ''));
-          // "-" means explicitly cleared by admin → show empty in input
-          const dv = (rawVal === '-') ? '' : rawVal;
-          // Whether admin has explicitly cleared this date (overrides staff value)
-          const isCleared = rawVal === '-';
+          const dv = pv !== undefined
+  ? pv
+  : (ar.hasOwnProperty(ds) ? ar[ds] : (sv ?? ''));
           let warn = false;
           if (dv) {
             const m = dv.match(/^(\d{1,2})-(\d{1,2})$/);
@@ -861,16 +867,14 @@ function renderAdminTable() {
               else { const sp = sv.split('-'); if (parseInt(m[1])<parseInt(sp[0])||parseInt(m[2])>parseInt(sp[1])) warn=true; }
             }
           }
-          // Show a subtle indicator when admin has cleared a staff-submitted value
-          const clearedStyle = (isCleared && sv) ? 'background:var(--rbg);' : '';
-          bHTML += `<td class="edit-cell" style="${clearedStyle}"><input class="${warn?'warn':''}"
-            data-key="${key}" data-date="${ds}" data-staff="${sv||''}" data-cleared="${isCleared}"
-            value="${dv}" placeholder="${isCleared ? '✕' : '-'}"
+          bHTML += `<td class="edit-cell"><input class="${warn?'warn':''}"
+            data-key="${key}" data-date="${ds}" data-staff="${sv||''}"
+            value="${dv}" placeholder="-"
             oninput="onCellInput(this)" onfocus="this.select()"></td>`;
         }
       });
     });
-    totHours += grandH; if (grandH > 0) totStaff++;
+    if (!excludeFromTotal) { totHours += grandH; if (grandH > 0) totStaff++; }
     bHTML += '</tr>';
   });
 
@@ -917,9 +921,8 @@ function onCellInput(el) {
     let wh = 0;
     wd.forEach(ds => {
       const pv = pendingEdits[key]?.[ds];
-      const rawV = pv !== undefined ? pv : (ar[ds] ?? sr[ds]);
-      // "-" = explicitly cleared, skip
-      if (rawV && rawV !== '-') wh += calcHours(rawV);
+      const v = pv !== undefined ? pv : (ar[ds] ?? sr[ds]);
+      if (v && v !== '-') wh += calcHours(v);
     });
     const tds = row.querySelectorAll('td');
     if (tds[col]) tds[col].textContent = wh || '-';
@@ -931,10 +934,10 @@ async function saveAdminEdits() {
   const pid = document.getElementById('admin-period-sel').value;
 
   // Apply pending edits locally
+  // Empty string input → normalize to "-" (explicit clear, keeps override over staff value)
   Object.entries(pendingEdits).forEach(([key, dates]) => {
     if (!adminEdits[key]) adminEdits[key] = {};
     Object.entries(dates).forEach(([date, val]) => {
-      // Empty string input → treat as explicit clear "-"
       const normalized = (val === '' || val === null || val === undefined) ? '-' : val;
       adminEdits[key][date] = normalized;
     });
@@ -1084,7 +1087,13 @@ td.th{font-weight:700;background:#fdf6dc;}
       const key = `${s.name}||${pid}`;
       const sr = shiftData[key]||{}, ar = adminEdits[key]||{};
       let wh = 0;
-      const vals = wd.map(ds => { const v=ar[ds]??sr[ds]??null; if(v){wh+=calcHours(v);dayTotals[ds]+=calcHours(v);} return v; });
+      const excludePrint = (s.type === '店長' || s.type === '社員');
+      const vals = wd.map(ds => {
+        const raw=ar[ds]??sr[ds]??null;
+        const v=(raw&&raw!=='-')?raw:null;
+        if(v){ wh+=calcHours(v); if(!excludePrint) dayTotals[ds]+=calcHours(v); }
+        return v;
+      });
       html += `<tr><td class="nm">${s.name}</td><td>${s.type||''}</td><td class="th">${wh||'-'}</td>`;
       vals.forEach((v,ci) => {
         const dow = new Date(wd[ci]+'T00:00:00').getDay();
@@ -1181,7 +1190,7 @@ function exportExcel() {
   const tRow=[null,{v:'PT時數'}];
   weeks.forEach(wd=>{
     let wt=0;const dv=[];
-    wd.forEach(ds=>{let dt=0;staffList.forEach(s=>{const key=`${s.name}||${pid}`;const raw=(adminEdits[key]||{})[ds]??(shiftData[key]||{})[ds];if(raw&&raw!=='-')dt+=calcHours(raw);});wt+=dt;dv.push(dt>0?{v:dt,t:'n'}:null);});
+    wd.forEach(ds=>{let dt=0;staffList.filter(s=>s.type!=='店長'&&s.type!=='社員').forEach(s=>{const key=`${s.name}||${pid}`;const raw=(adminEdits[key]||{})[ds]??(shiftData[key]||{})[ds];if(raw&&raw!=='-')dt+=calcHours(raw);});wt+=dt;dv.push(dt>0?{v:dt,t:'n'}:null);});
     tRow.push({v:wt,t:'n'});dv.forEach(v=>tRow.push(v));
   });
   rows.push(tRow);
