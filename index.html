@@ -485,6 +485,7 @@ async function syncFromCloud() {
     shiftData = sd;
 
     // adminEdits — accept valid times AND "-" (explicit clear marker)
+    // Cloud is always source of truth after save (allEdits includes full merged data)
     const ae = {};
     (json.adminEdits || []).forEach(r => {
       if (!r.name || !r.periodId || !r.date) return;
@@ -493,12 +494,6 @@ async function syncFromCloud() {
       const k = `${r.name}||${r.periodId}`;
       if (!ae[k]) ae[k] = {};
       ae[k][toDateStr(r.date)] = timeStr;
-    });
-    // Merge local adminEdits on top (local wins — more recent than cloud)
-    const localAe = JSON.parse(localStorage.getItem('adminEdits') || '{}');
-    Object.entries(localAe).forEach(([k, dates]) => {
-      if (!ae[k]) ae[k] = {};
-      Object.entries(dates).forEach(([date, val]) => { ae[k][date] = val; });
     });
     adminEdits = ae;
 
@@ -948,10 +943,22 @@ async function saveAdminEdits() {
 
   saveLocal();
 
-  // Build full payload for this period: all staff in one request
+  // Build full payload: merge shiftData(base) + adminEdits(override) for every staff
+  // This ensures blank-cleared cells ("-") are explicitly written to cloud
   const allEdits = staffList.map(s => {
     const key = `${s.name}||${pid}`;
-    return { name: s.name, days: adminEdits[key] || {} };
+    const sr  = shiftData[key]  || {};
+    const ar  = adminEdits[key] || {};
+    // Start from all dates staff submitted, then apply admin overrides on top
+    const days = {};
+    Object.entries(sr).forEach(([date, val]) => {
+      days[date] = ar.hasOwnProperty(date) ? ar[date] : val;
+    });
+    // Also include any admin-added entries not in staff submission
+    Object.entries(ar).forEach(([date, val]) => {
+      if (!days.hasOwnProperty(date)) days[date] = val;
+    });
+    return { name: s.name, days };
   });
 
   const ok = await cloudPost({ action: 'saveAdminEditsBulk', periodId: pid, allEdits });
