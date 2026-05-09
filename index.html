@@ -485,24 +485,20 @@ async function syncFromCloud() {
     shiftData = sd;
 
     // adminEdits — accept valid times AND "-" (explicit clear marker)
-    // Cloud is the base; then merge any local edits on top (local wins per-cell)
     const ae = {};
     (json.adminEdits || []).forEach(r => {
       if (!r.name || !r.periodId || !r.date) return;
       const timeStr = String(r.time ?? '').trim();
-      // "-" means admin explicitly cleared this cell
       if (!isValidTime(timeStr) && timeStr !== '-') return;
       const k = `${r.name}||${r.periodId}`;
       if (!ae[k]) ae[k] = {};
       ae[k][toDateStr(r.date)] = timeStr;
     });
-    // Merge: local adminEdits overrides cloud (local is always more recent after save)
+    // Merge local adminEdits on top (local wins — more recent than cloud)
     const localAe = JSON.parse(localStorage.getItem('adminEdits') || '{}');
     Object.entries(localAe).forEach(([k, dates]) => {
       if (!ae[k]) ae[k] = {};
-      Object.entries(dates).forEach(([date, val]) => {
-        ae[k][date] = val; // local always wins
-      });
+      Object.entries(dates).forEach(([date, val]) => { ae[k][date] = val; });
     });
     adminEdits = ae;
 
@@ -867,7 +863,6 @@ function renderAdminTable() {
           const pv = pendingEdits[key]?.[ds];
           const rawAdmin = ar.hasOwnProperty(ds) ? ar[ds] : undefined;
           const raw = pv !== undefined ? pv : (rawAdmin !== undefined ? rawAdmin : (sv ?? ''));
-          // "-" = explicitly cleared → show empty in input field
           const dv = (raw === '-') ? '' : raw;
           let warn = false;
           if (dv) {
@@ -947,7 +942,6 @@ async function saveAdminEdits() {
   Object.entries(pendingEdits).forEach(([key, dates]) => {
     if (!adminEdits[key]) adminEdits[key] = {};
     Object.entries(dates).forEach(([date, val]) => {
-      // 空白入力 → "-"として保存（スタッフ提出値への上書きを維持）
       adminEdits[key][date] = (val === '' || val == null) ? '-' : val;
     });
   });
