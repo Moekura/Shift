@@ -484,9 +484,8 @@ async function syncFromCloud() {
     });
     shiftData = sd;
 
-    // adminEdits — accept valid times AND "-" (explicit clear marker)
-    // Strategy: cloud is base, but local overrides cloud cell-by-cell
-    // This ensures edits saved on this device survive cloud re-sync
+    // adminEdits — cloud is single source of truth
+    // Accept valid times ("12-22") AND "-" (explicit admin clear marker)
     const ae = {};
     (json.adminEdits || []).forEach(r => {
       if (!r.name || !r.periodId || !r.date) return;
@@ -496,18 +495,9 @@ async function syncFromCloud() {
       if (!ae[k]) ae[k] = {};
       ae[k][toDateStr(r.date)] = timeStr;
     });
-    // Overlay local adminEdits on top (local is always more recent after save)
-    const localAe = JSON.parse(localStorage.getItem('adminEdits') || '{}');
-    Object.entries(localAe).forEach(([k, dates]) => {
-      if (!ae[k]) ae[k] = {};
-      Object.entries(dates).forEach(([date, val]) => {
-        // local wins over cloud for every cell
-        ae[k][date] = val;
-      });
-    });
     adminEdits = ae;
-    // Debug: log what we got from cloud
-    console.log('[sync] cloud adminEdits count:', (json.adminEdits||[]).length, 'sample:', JSON.stringify((json.adminEdits||[]).slice(0,3)));
+    console.log('[sync] adminEdits from cloud:', (json.adminEdits||[]).length,
+      'entries. Sample:', JSON.stringify((json.adminEdits||[]).slice(0,5)));
 
     // staffList — sync from cloud if available
     if (Array.isArray(json.staffList) && json.staffList.length > 0) {
@@ -955,24 +945,19 @@ async function saveAdminEdits() {
 
   saveLocal();
 
-  // Build full payload: shiftData(base) + adminEdits(override) for every staff
-  // Must include ALL dates so cloud has complete picture for cross-device sync
+  // Build full payload: sr(staff base) + ar(admin override) for ALL dates
+  // ar entries always win (including "-" for cleared cells)
   const allEdits = staffList.map(s => {
-    const key  = `${s.name}||${pid}`;
-    const sr   = shiftData[key]  || {};
-    const ar   = adminEdits[key] || {};
+    const key = `${s.name}||${pid}`;
+    const sr  = shiftData[key]  || {};
+    const ar  = adminEdits[key] || {};
     const days = {};
-    // Base: all dates from staff submission
-    Object.entries(sr).forEach(([date, val]) => {
-      days[date] = ar.hasOwnProperty(date) ? ar[date] : val;
-    });
-    // Also include admin-only entries not in staff submission
-    Object.entries(ar).forEach(([date, val]) => {
-      if (!days.hasOwnProperty(date)) days[date] = val;
-    });
+    Object.entries(sr).forEach(([d, v]) => { days[d] = v; });       // base: staff
+    Object.entries(ar).forEach(([d, v]) => { days[d] = v; });       // override: admin
     return { name: s.name, days };
   });
-  console.log('[save] allEdits sample:', JSON.stringify(allEdits.slice(0,2)));
+  console.log('[save] sending:', allEdits.filter(e => Object.keys(e.days).length)
+    .map(e => `${e.name}:${JSON.stringify(e.days)}`).join(' | '));
 
   const ok = await cloudPost({ action: 'saveAdminEditsBulk', periodId: pid, allEdits });
 
