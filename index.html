@@ -145,6 +145,13 @@ select:focus,input:focus{border-color:var(--yellow);}
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;}
 
 .table-wrap{overflow-x:auto;border:1px solid var(--border);}
+.th-name,.th-type-col{position:sticky;z-index:3;background:var(--black);}
+.th-name{left:0;}
+.th-type-col{left:90px;}
+td.td-name{position:sticky;left:0;z-index:2;background:var(--white);box-shadow:2px 0 3px rgba(0,0,0,.07);}
+td.td-type{position:sticky;left:90px;z-index:2;background:var(--white);}
+tr:hover td.td-name,tr:hover td.td-type{background:#fafafa;}
+.total-row td.td-name,.total-row td.td-type{background:#efefef;}
 table{width:100%;border-collapse:collapse;font-size:.75rem;white-space:nowrap;}
 th{background:var(--black);padding:8px 9px;text-align:center;border-right:1px solid #333;color:#fff;font-weight:700;font-size:.7rem;letter-spacing:.03em;}
 th.th-name{text-align:left;min-width:90px;}
@@ -477,15 +484,25 @@ async function syncFromCloud() {
     });
     shiftData = sd;
 
-    // adminEdits — only store valid time strings
+    // adminEdits — accept valid times AND "-" (explicit clear marker)
+    // Cloud is the base; then merge any local edits on top (local wins per-cell)
     const ae = {};
     (json.adminEdits || []).forEach(r => {
       if (!r.name || !r.periodId || !r.date) return;
-      const timeStr = String(r.time || '').trim();
-      if (!isValidTime(timeStr)) return;
+      const timeStr = String(r.time ?? '').trim();
+      // "-" means admin explicitly cleared this cell
+      if (!isValidTime(timeStr) && timeStr !== '-') return;
       const k = `${r.name}||${r.periodId}`;
       if (!ae[k]) ae[k] = {};
       ae[k][toDateStr(r.date)] = timeStr;
+    });
+    // Merge: local adminEdits overrides cloud (local is always more recent after save)
+    const localAe = JSON.parse(localStorage.getItem('adminEdits') || '{}');
+    Object.entries(localAe).forEach(([k, dates]) => {
+      if (!ae[k]) ae[k] = {};
+      Object.entries(dates).forEach(([date, val]) => {
+        ae[k][date] = val; // local always wins
+      });
     });
     adminEdits = ae;
 
@@ -798,7 +815,7 @@ function renderAdminTable() {
   const weeks = getWeeks(days);
 
   // Header row1: week groups
-  let h1 = '<tr><th class="th-name" rowspan="2">氏名</th><th rowspan="2">形態</th>';
+  let h1 = '<tr><th class="th-name" rowspan="2">氏名</th><th class="th-type-col" rowspan="2">形態</th>';
   let h2 = '<tr>';
   weeks.forEach((wd, wi) => {
     const bl = wi > 0 ? 'border-left:2px solid var(--teal);' : '';
@@ -824,6 +841,7 @@ function renderAdminTable() {
     const key = `${s.name}||${pid}`;
     const sr = shiftData[key]  || {};
     const ar = adminEdits[key] || {};
+    const excludeFromTotal = (s.type === '店長' || s.type === '社員');
     bHTML += `<tr><td class="td-name">${s.name}</td><td class="td-type">${s.type||''}</td>`;
     let grandH = 0;
     weeks.forEach((wd, wi) => {
@@ -832,9 +850,13 @@ function renderAdminTable() {
         const val = adminView === 'admin'
           ? (pendingEdits[key]?.[ds] !== undefined ? pendingEdits[key][ds] : (ar[ds] ?? sr[ds]))
           : sr[ds];
-        if (val) { const h = calcHours(val); wh += h; dayTotals[ds] += h; daysSet.add(ds); }
+        if (val && val !== '-') {
+          const h = calcHours(val); wh += h;
+          if (!excludeFromTotal) { dayTotals[ds] += h; daysSet.add(ds); }
+        }
       });
-      grandH += wh; weekTotals[wi] += wh;
+      grandH += wh;
+      if (!excludeFromTotal) weekTotals[wi] += wh;
       const bl = wi > 0 ? 'border-left:2px solid var(--teal);' : '';
       bHTML += `<td class="td-hours" style="${bl}">${wh||'-'}</td>`;
       wd.forEach(ds => {
@@ -843,7 +865,10 @@ function renderAdminTable() {
           bHTML += sv ? `<td><span class="sc sc-staff">${sv}</span></td>` : `<td style="color:#ccc;font-size:.7rem">-</td>`;
         } else {
           const pv = pendingEdits[key]?.[ds];
-          const dv = pv !== undefined ? pv : (ar[ds] ?? sv ?? '');
+          const rawAdmin = ar.hasOwnProperty(ds) ? ar[ds] : undefined;
+          const raw = pv !== undefined ? pv : (rawAdmin !== undefined ? rawAdmin : (sv ?? ''));
+          // "-" = explicitly cleared → show empty in input field
+          const dv = (raw === '-') ? '' : raw;
           let warn = false;
           if (dv) {
             const m = dv.match(/^(\d{1,2})-(\d{1,2})$/);
@@ -859,7 +884,7 @@ function renderAdminTable() {
         }
       });
     });
-    totHours += grandH; if (grandH > 0) totStaff++;
+    if (!excludeFromTotal) { totHours += grandH; if (grandH > 0) totStaff++; }
     bHTML += '</tr>';
   });
 
@@ -907,7 +932,7 @@ function onCellInput(el) {
     wd.forEach(ds => {
       const pv = pendingEdits[key]?.[ds];
       const v = pv !== undefined ? pv : (ar[ds] ?? sr[ds]);
-      if (v) wh += calcHours(v);
+      if (v && v !== '-') wh += calcHours(v);
     });
     const tds = row.querySelectorAll('td');
     if (tds[col]) tds[col].textContent = wh || '-';
@@ -922,10 +947,9 @@ async function saveAdminEdits() {
   Object.entries(pendingEdits).forEach(([key, dates]) => {
     if (!adminEdits[key]) adminEdits[key] = {};
     Object.entries(dates).forEach(([date, val]) => {
-      if (!val || val === '-') delete adminEdits[key][date];
-      else adminEdits[key][date] = val;
+      // 空白入力 → "-"として保存（スタッフ提出値への上書きを維持）
+      adminEdits[key][date] = (val === '' || val == null) ? '-' : val;
     });
-    if (Object.keys(adminEdits[key]).length === 0) delete adminEdits[key];
   });
 
   saveLocal();
@@ -1072,7 +1096,7 @@ td.th{font-weight:700;background:#fdf6dc;}
       const key = `${s.name}||${pid}`;
       const sr = shiftData[key]||{}, ar = adminEdits[key]||{};
       let wh = 0;
-      const vals = wd.map(ds => { const v=ar[ds]??sr[ds]??null; if(v){wh+=calcHours(v);dayTotals[ds]+=calcHours(v);} return v; });
+      const vals = wd.map(ds => { const raw=ar[ds]??sr[ds]??null; const v=(raw&&raw!=='-')?raw:null; if(v){wh+=calcHours(v);dayTotals[ds]+=calcHours(v);} return v; });
       html += `<tr><td class="nm">${s.name}</td><td>${s.type||''}</td><td class="th">${wh||'-'}</td>`;
       vals.forEach((v,ci) => {
         const dow = new Date(wd[ci]+'T00:00:00').getDay();
@@ -1160,7 +1184,7 @@ function exportExcel() {
     const row=[{v:s.type||''},{v:s.name}];
     weeks.forEach(wd=>{
       let wh=0;const vals=[];
-      wd.forEach(ds=>{const v=ar[ds]??sr[ds];vals.push(v?{v}:null);if(v)wh+=calcHours(v);});
+      wd.forEach(ds=>{const raw=ar[ds]??sr[ds];const v=(raw&&raw!=='-')?raw:null;vals.push(v?{v}:null);if(v)wh+=calcHours(v);});
       row.push({v:wh,t:'n'});vals.forEach(v=>row.push(v));
     });
     rows.push(row);
@@ -1169,7 +1193,7 @@ function exportExcel() {
   const tRow=[null,{v:'PT時數'}];
   weeks.forEach(wd=>{
     let wt=0;const dv=[];
-    wd.forEach(ds=>{let dt=0;staffList.forEach(s=>{const key=`${s.name}||${pid}`;const v=(adminEdits[key]||{})[ds]??(shiftData[key]||{})[ds];if(v)dt+=calcHours(v);});wt+=dt;dv.push(dt>0?{v:dt,t:'n'}:null);});
+    wd.forEach(ds=>{let dt=0;staffList.forEach(s=>{const key=`${s.name}||${pid}`;const raw=(adminEdits[key]||{})[ds]??(shiftData[key]||{})[ds];if(raw&&raw!=='-')dt+=calcHours(raw);});wt+=dt;dv.push(dt>0?{v:dt,t:'n'}:null);});
     tRow.push({v:wt,t:'n'});dv.forEach(v=>tRow.push(v));
   });
   rows.push(tRow);
