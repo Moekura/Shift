@@ -750,8 +750,12 @@ async function submitShift() {
   shiftData[key] = JSON.parse(JSON.stringify(selDays));
   saveLocal();
   const ok = await cloudPost({action:'submitShift', name:selName, periodId:selPeriodId, periodName:period?.name||'', days:selDays});
-  showToast(ok ? `✓ ${selName} のシフトを送信しました！` : '⚠ クラウド送信失敗。ローカルに保存しました。', !ok);
-  selDays = {}; buildCalendar(); updateSummary();
+  if (ok) {
+    showToast(`✓ ${selName} のシフトを送信しました！`);
+    selDays = {}; buildCalendar(); updateSummary();
+  } else {
+    showToast('⚠ クラウド送信失敗。入力内容は保持されています。再度お試しください。', true);
+  }
   btn.disabled = false; btn.textContent = '登録を完了する ✓';
   updateSubmitBtn();
 }
