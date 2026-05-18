@@ -1093,8 +1093,9 @@ td.th{font-weight:700;background:#fdf6dc;}
     staffList.forEach(s => {
       const key = `${s.name}||${pid}`;
       const sr = shiftData[key]||{}, ar = adminEdits[key]||{};
+      const excludeFromTotal = (s.type === '店長' || s.type === '社員');
       let wh = 0;
-      const vals = wd.map(ds => { const raw=ar[ds]??sr[ds]??null; const v=(raw&&raw!=='-')?raw:null; if(v){wh+=calcHours(v);dayTotals[ds]+=calcHours(v);} return v; });
+      const vals = wd.map(ds => { const raw=ar[ds]??sr[ds]??null; const v=(raw&&raw!=='-')?raw:null; if(v){wh+=calcHours(v); if(!excludeFromTotal) dayTotals[ds]+=calcHours(v);} return v; });
       html += `<tr><td class="nm">${s.name}</td><td>${s.type||''}</td><td class="th">${wh||'-'}</td>`;
       vals.forEach((v,ci) => {
         const dow = new Date(wd[ci]+'T00:00:00').getDay();
@@ -1191,7 +1192,7 @@ function exportExcel() {
   const tRow=[null,{v:'PT時數'}];
   weeks.forEach(wd=>{
     let wt=0;const dv=[];
-    wd.forEach(ds=>{let dt=0;staffList.forEach(s=>{const key=`${s.name}||${pid}`;const raw=(adminEdits[key]||{})[ds]??(shiftData[key]||{})[ds];if(raw&&raw!=='-')dt+=calcHours(raw);});wt+=dt;dv.push(dt>0?{v:dt,t:'n'}:null);});
+    wd.forEach(ds=>{let dt=0;staffList.forEach(s=>{const excludeFromTotal=(s.type==='店長'||s.type==='社員');if(excludeFromTotal)return;const key=`${s.name}||${pid}`;const raw=(adminEdits[key]||{})[ds]??(shiftData[key]||{})[ds];if(raw&&raw!=='-')dt+=calcHours(raw);});wt+=dt;dv.push(dt>0?{v:dt,t:'n'}:null);});
     tRow.push({v:wt,t:'n'});dv.forEach(v=>tRow.push(v));
   });
   rows.push(tRow);
